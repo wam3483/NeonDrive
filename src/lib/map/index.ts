@@ -12,6 +12,7 @@ export type { MapData, MapConfig, Center, Corner, Edge, Graph } from './generato
 export type { RenderOptions } from './renderer';
 export type {
   Town,
+  TownSize,
   TownConfig,
   TownPlacementRule,
   TownGeneratorResult,

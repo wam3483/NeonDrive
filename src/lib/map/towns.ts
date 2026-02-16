@@ -33,6 +33,8 @@ export interface TownConfig {
   seed?: number;
 }
 
+export type TownSize = 'large' | 'medium' | 'small';
+
 export interface Town {
   id: number;
   center: Center;
@@ -45,6 +47,8 @@ export interface Town {
   y: number;
   // Generated name
   name: string;
+  // Town size affects icon rendering
+  size: TownSize;
 }
 
 export interface TownGeneratorResult {
@@ -319,6 +323,8 @@ export class TownGenerator {
   }
 
   private createTown(id: number, center: Center, rule: TownPlacementRule): Town {
+    const size = this.determineTownSize(rule.type);
+
     const town: Town = {
       id,
       center,
@@ -328,12 +334,45 @@ export class TownGenerator {
       x: center.point.x,
       y: center.point.y,
       name: '', // Will be set below
+      size,
     };
 
     // Generate name based on town type and features
     town.name = this.nameGenerator.generateName(town);
 
     return town;
+  }
+
+  private determineTownSize(type: TownPlacementRule['type']): TownSize {
+    const roll = this.random.next();
+
+    // Size distribution varies by town type
+    switch (type) {
+      case 'shoreline':
+        // Coastal towns: more likely to be large (ports, trade hubs)
+        if (roll < 0.35) return 'large';
+        if (roll < 0.75) return 'medium';
+        return 'small';
+
+      case 'river':
+        // River towns: mostly medium (trade stops)
+        if (roll < 0.2) return 'large';
+        if (roll < 0.7) return 'medium';
+        return 'small';
+
+      case 'elevation':
+        // Mountain towns: mostly small (outposts, keeps)
+        if (roll < 0.15) return 'large';
+        if (roll < 0.45) return 'medium';
+        return 'small';
+
+      case 'inland':
+      default:
+        // Inland towns: villages and hamlets
+        if (roll < 0.1) return 'large';
+        if (roll < 0.45) return 'medium';
+        return 'small';
+    }
   }
 }
 

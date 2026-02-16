@@ -78,6 +78,24 @@ const SHORE_COLORS = {
   foamLight: 0xc8e4ff,
 };
 
+// Cloud colors (Asian art style - soft, muted)
+const CLOUD_COLORS = {
+  main: 0xffffff,
+  shadow: 0xe8f0f8,
+  highlight: 0xffffff,
+  outline: 0xd0e0f0,
+};
+
+// Cloud configuration
+interface Cloud {
+  x: number;
+  y: number;
+  scale: number;
+  layers: number;
+  seed: number;
+  speed: number;
+}
+
 export class MapRenderer {
   private app: Application;
   private mapContainer: Container;
@@ -105,10 +123,12 @@ export class MapRenderer {
   private shoreGraphics: Graphics | null = null;
   private landGraphics: Graphics | null = null;
   private townGraphics: Graphics | null = null;
+  private cloudGraphics: Graphics | null = null;
   private oceanCenters: Center[] = [];  // True ocean only
   private lakeCenters: Center[] = [];   // Inland water (lakes, marshes)
   private coastlineEdges: Edge[] = [];
   private towns: Town[] = [];
+  private clouds: Cloud[] = [];
   private animationTime: number = 0;
   private animationFrame: number = 0;
 
@@ -266,6 +286,11 @@ export class MapRenderer {
       this.drawOceanAnimated(this.oceanGraphics, this.foamGraphics!, this.animationTime);
       this.drawShorelineAnimated(this.shoreGraphics!, this.animationTime);
     }
+
+    // Clouds animate smoothly (not stepped) for dreamlike drift
+    if (this.cloudGraphics && this.clouds.length > 0) {
+      this.drawClouds(this.cloudGraphics, this.animationTime);
+    }
   }
 
   setMap(mapData: MapData): void {
@@ -276,7 +301,41 @@ export class MapRenderer {
     this.lakeCenters = mapData.centers.filter(c => c.water && !c.ocean);
     // Cache coastline edges (edges between ocean and land)
     this.coastlineEdges = this.findCoastlineEdges(mapData);
+    // Generate very infrequent clouds
+    this.generateClouds(mapData.config.seed);
     this.render();
+  }
+
+  private generateClouds(seed: number): void {
+    this.clouds = [];
+
+    // Very infrequent: only 2-4 clouds on the entire map
+    // Use seed for deterministic but varied placement
+    const rng = this.mulberry32(seed + 12345);
+    const numClouds = 2 + Math.floor(rng() * 3); // 2-4 clouds
+
+    for (let i = 0; i < numClouds; i++) {
+      // Spread clouds across the map, starting off-screen to the left
+      const cloud: Cloud = {
+        x: -100 + rng() * (this.width + 200), // Can start off-screen
+        y: 30 + rng() * (this.height * 0.4), // Upper portion of map
+        scale: 0.6 + rng() * 0.8, // Varied sizes
+        layers: 2 + Math.floor(rng() * 3), // 2-4 wispy layers
+        seed: rng() * 10000, // Unique seed for shape variation
+        speed: 0.02 + rng() * 0.03, // Very slow drift
+      };
+      this.clouds.push(cloud);
+    }
+  }
+
+  // Simple seeded random for cloud generation
+  private mulberry32(seed: number): () => number {
+    return function() {
+      let t = seed += 0x6D2B79F5;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
   }
 
   private findCoastlineEdges(mapData: MapData): Edge[] {
@@ -322,6 +381,7 @@ export class MapRenderer {
     this.shoreGraphics = null;
     this.landGraphics = null;
     this.townGraphics = null;
+    this.cloudGraphics = null;
 
     // Draw polygons
     if (this.options.showPolygons) {
@@ -368,12 +428,18 @@ export class MapRenderer {
       this.drawTowns(this.townGraphics);
       this.mapContainer.addChild(this.townGraphics);
     }
+
+    // Draw clouds on the very top (atmospheric layer)
+    if (this.options.showPolygons && this.clouds.length > 0) {
+      this.cloudGraphics = new Graphics();
+      this.drawClouds(this.cloudGraphics, this.animationTime);
+      this.mapContainer.addChild(this.cloudGraphics);
+    }
   }
 
   private drawTowns(graphics: Graphics): void {
     for (const town of this.towns) {
       const colors = TOWN_COLORS[town.type] || TOWN_COLORS.inland;
-      const size = 6;
 
       // Create a container for each town (for interactivity)
       const townContainer = new Container();
@@ -382,24 +448,29 @@ export class MapRenderer {
       townContainer.eventMode = 'static';
       townContainer.cursor = 'pointer';
 
-      // Draw the marker
+      // Draw the marker based on town size
       const marker = new Graphics();
+      let markerSize: number;
 
-      // Outer stroke
-      marker.circle(0, 0, size + 1.5);
-      marker.fill(colors.stroke);
-
-      // Inner fill
-      marker.circle(0, 0, size);
-      marker.fill(colors.fill);
-
-      // Inner highlight
-      marker.circle(-1.5, -1.5, size * 0.35);
-      marker.fill(0xffffff);
+      switch (town.size) {
+        case 'large':
+          markerSize = 10;
+          this.drawLargeTownIcon(marker, colors);
+          break;
+        case 'medium':
+          markerSize = 7;
+          this.drawMediumTownIcon(marker, colors);
+          break;
+        case 'small':
+        default:
+          markerSize = 4;
+          this.drawSmallTownIcon(marker, colors);
+          break;
+      }
 
       // Hit area (slightly larger for easier hovering)
       const hitArea = new Graphics();
-      hitArea.circle(0, 0, size + 8);
+      hitArea.circle(0, 0, markerSize + 8);
       hitArea.fill({ color: 0xffffff, alpha: 0 });
 
       townContainer.addChild(hitArea);
@@ -411,14 +482,14 @@ export class MapRenderer {
         const smallText = new Text({ text: town.name, style: TOWN_TEXT_SMALL });
         smallText.anchor.set(0.5, 0);
         smallText.x = 0;
-        smallText.y = size + 3;
+        smallText.y = markerSize + 3;
         smallText.alpha = 0.7;
 
         // Large label (visible on hover)
         const largeText = new Text({ text: town.name, style: TOWN_TEXT_LARGE });
         largeText.anchor.set(0.5, 1);
         largeText.x = 0;
-        largeText.y = -(size + 5);
+        largeText.y = -(markerSize + 5);
         largeText.visible = false;
 
         townContainer.addChild(smallText);
@@ -442,6 +513,121 @@ export class MapRenderer {
 
       this.mapContainer.addChild(townContainer);
     }
+  }
+
+  // Large town: Castle/fortress icon with towers
+  private drawLargeTownIcon(
+    graphics: Graphics,
+    colors: { fill: number; stroke: number }
+  ): void {
+    const size = 10;
+
+    // Outer glow/stroke
+    graphics.roundRect(-size - 1, -size - 1, size * 2 + 2, size * 2 + 2, 2);
+    graphics.fill(colors.stroke);
+
+    // Main building body
+    graphics.roundRect(-size + 1, -size * 0.5, size * 2 - 2, size * 1.5, 1);
+    graphics.fill(colors.fill);
+
+    // Left tower
+    graphics.rect(-size + 1, -size, 4, size * 0.6);
+    graphics.fill(colors.fill);
+    // Tower top (battlement)
+    graphics.rect(-size, -size - 2, 2, 3);
+    graphics.fill(colors.fill);
+    graphics.rect(-size + 3, -size - 2, 2, 3);
+    graphics.fill(colors.fill);
+
+    // Right tower
+    graphics.rect(size - 5, -size, 4, size * 0.6);
+    graphics.fill(colors.fill);
+    // Tower top (battlement)
+    graphics.rect(size - 5, -size - 2, 2, 3);
+    graphics.fill(colors.fill);
+    graphics.rect(size - 2, -size - 2, 2, 3);
+    graphics.fill(colors.fill);
+
+    // Center tower (taller)
+    graphics.rect(-2, -size - 1, 4, size * 0.7);
+    graphics.fill(colors.fill);
+    // Center battlement
+    graphics.rect(-2, -size - 3, 1.5, 3);
+    graphics.fill(colors.fill);
+    graphics.rect(0.5, -size - 3, 1.5, 3);
+    graphics.fill(colors.fill);
+
+    // Gate/door
+    graphics.roundRect(-1.5, size * 0.3, 3, 4, 1);
+    graphics.fill(colors.stroke);
+
+    // Highlight
+    graphics.rect(-size + 2, -size + 1, 2, 2);
+    graphics.fill(0xffffff);
+  }
+
+  // Medium town: House/building cluster icon
+  private drawMediumTownIcon(
+    graphics: Graphics,
+    colors: { fill: number; stroke: number }
+  ): void {
+    const size = 7;
+
+    // Outer stroke
+    graphics.circle(0, 0, size + 1.5);
+    graphics.fill(colors.stroke);
+
+    // Main circle
+    graphics.circle(0, 0, size);
+    graphics.fill(colors.fill);
+
+    // House shape in center
+    // Roof (triangle)
+    graphics.moveTo(0, -size * 0.7);
+    graphics.lineTo(-size * 0.5, -size * 0.1);
+    graphics.lineTo(size * 0.5, -size * 0.1);
+    graphics.closePath();
+    graphics.fill(colors.stroke);
+
+    // Building body
+    graphics.rect(-size * 0.4, -size * 0.1, size * 0.8, size * 0.7);
+    graphics.fill(0xffffff);
+
+    // Door
+    graphics.rect(-size * 0.15, size * 0.2, size * 0.3, size * 0.4);
+    graphics.fill(colors.stroke);
+
+    // Highlight
+    graphics.circle(-size * 0.3, -size * 0.3, size * 0.15);
+    graphics.fill(0xffffff);
+  }
+
+  // Small town: Simple diamond/dot icon
+  private drawSmallTownIcon(
+    graphics: Graphics,
+    colors: { fill: number; stroke: number }
+  ): void {
+    const size = 4;
+
+    // Outer stroke (diamond shape)
+    graphics.moveTo(0, -size - 1);
+    graphics.lineTo(size + 1, 0);
+    graphics.lineTo(0, size + 1);
+    graphics.lineTo(-size - 1, 0);
+    graphics.closePath();
+    graphics.fill(colors.stroke);
+
+    // Inner fill (diamond)
+    graphics.moveTo(0, -size);
+    graphics.lineTo(size, 0);
+    graphics.lineTo(0, size);
+    graphics.lineTo(-size, 0);
+    graphics.closePath();
+    graphics.fill(colors.fill);
+
+    // Small highlight
+    graphics.circle(-size * 0.25, -size * 0.25, size * 0.3);
+    graphics.fill(0xffffff);
   }
 
   private drawShorelineAnimated(graphics: Graphics, time: number): void {
@@ -756,6 +942,184 @@ export class MapRenderer {
       graphics.quadraticCurveTo(cx, foamY2 - size * 0.2, cx + size * 0.5, foamY2);
       graphics.stroke({ width: Math.max(1, size * 0.15), color: colors.foamLight, cap: 'round' });
     }
+  }
+
+  private drawClouds(graphics: Graphics, time: number): void {
+    graphics.clear();
+
+    for (const cloud of this.clouds) {
+      // Slowly drift clouds across the screen
+      const driftX = cloud.x + time * cloud.speed * 20;
+
+      // Wrap around when cloud goes off screen
+      const wrappedX = ((driftX + 200) % (this.width + 400)) - 200;
+
+      // Subtle vertical bob
+      const bobY = cloud.y + Math.sin(time * 0.02 + cloud.seed) * 5;
+
+      this.drawAsianCloud(graphics, wrappedX, bobY, cloud.scale, cloud.layers, cloud.seed, time);
+    }
+  }
+
+  private drawAsianCloud(
+    graphics: Graphics,
+    x: number,
+    y: number,
+    scale: number,
+    layers: number,
+    seed: number,
+    time: number
+  ): void {
+    // Asian art style clouds: flowing curves with layered wisps
+    // Inspired by ukiyo-e and traditional Chinese painting
+
+    const rng = this.mulberry32(Math.floor(seed));
+    const baseWidth = 80 * scale;
+    const baseHeight = 30 * scale;
+
+    // Draw multiple wispy layers
+    for (let layer = 0; layer < layers; layer++) {
+      const layerOffset = layer * 8 * scale;
+      const layerY = y + layerOffset;
+      const layerScale = 1 - layer * 0.15;
+      const alpha = 0.6 - layer * 0.12;
+
+      // Each layer has flowing curved segments
+      this.drawCloudWisp(
+        graphics,
+        x - baseWidth * 0.3 * layerScale + rng() * 20,
+        layerY,
+        baseWidth * layerScale,
+        baseHeight * layerScale * (0.8 + rng() * 0.4),
+        alpha,
+        seed + layer,
+        time
+      );
+    }
+
+    // Add some smaller accent wisps
+    const numAccents = 1 + Math.floor(rng() * 2);
+    for (let i = 0; i < numAccents; i++) {
+      const accentX = x + (rng() - 0.5) * baseWidth * 1.5;
+      const accentY = y + rng() * baseHeight * 0.5;
+      const accentScale = 0.3 + rng() * 0.3;
+
+      this.drawCloudWisp(
+        graphics,
+        accentX,
+        accentY,
+        baseWidth * accentScale,
+        baseHeight * accentScale * 0.6,
+        0.35,
+        seed + 100 + i,
+        time
+      );
+    }
+  }
+
+  private drawCloudWisp(
+    graphics: Graphics,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    alpha: number,
+    seed: number,
+    time: number
+  ): void {
+    // Create flowing, curved cloud shape like traditional Asian art
+    // Uses bezier curves for smooth, organic shapes
+
+    const rng = this.mulberry32(Math.floor(seed * 7919));
+
+    // Subtle breathing animation
+    const breathe = 1 + Math.sin(time * 0.03 + seed * 0.1) * 0.05;
+    const w = width * breathe;
+    const h = height * breathe;
+
+    // Number of curves in this wisp (more = more flowing)
+    const numCurves = 3 + Math.floor(rng() * 2);
+
+    // Start point (left side with slight curve up)
+    const startX = x;
+    const startY = y + h * 0.3;
+
+    graphics.moveTo(startX, startY);
+
+    // Top edge - flowing curves going right
+    let currentX = startX;
+    const segmentWidth = w / numCurves;
+
+    for (let i = 0; i < numCurves; i++) {
+      const nextX = currentX + segmentWidth;
+      const peakOffset = (rng() - 0.3) * h * 0.8;
+      const cpX1 = currentX + segmentWidth * 0.3;
+      const cpY1 = y - h * 0.3 + peakOffset;
+      const cpX2 = currentX + segmentWidth * 0.7;
+      const cpY2 = y - h * 0.2 + peakOffset * 0.5;
+
+      graphics.bezierCurveTo(cpX1, cpY1, cpX2, cpY2, nextX, y + rng() * h * 0.2);
+      currentX = nextX;
+    }
+
+    // Right curl (characteristic of Asian clouds)
+    const curlX = currentX + w * 0.1;
+    const curlY = y + h * 0.4;
+    graphics.bezierCurveTo(
+      currentX + w * 0.05, y + h * 0.1,
+      curlX, y + h * 0.2,
+      curlX - w * 0.05, curlY
+    );
+
+    // Bottom edge - gentler curves going back left
+    currentX = curlX - w * 0.05;
+    for (let i = 0; i < numCurves; i++) {
+      const nextX = currentX - segmentWidth;
+      const dip = rng() * h * 0.3;
+      const cpX1 = currentX - segmentWidth * 0.3;
+      const cpY1 = y + h * 0.5 + dip;
+      const cpX2 = currentX - segmentWidth * 0.7;
+      const cpY2 = y + h * 0.4 + dip * 0.5;
+
+      graphics.bezierCurveTo(cpX1, cpY1, cpX2, cpY2, nextX, y + h * 0.3 + rng() * h * 0.1);
+      currentX = nextX;
+    }
+
+    // Close back to start with a small curl
+    graphics.bezierCurveTo(
+      startX - w * 0.05, y + h * 0.4,
+      startX - w * 0.03, y + h * 0.35,
+      startX, startY
+    );
+
+    // Fill with soft white
+    graphics.fill({ color: CLOUD_COLORS.main, alpha: alpha * 0.85 });
+
+    // Subtle outline for that ink-painting look
+    graphics.moveTo(startX, startY);
+
+    // Redraw just the top edge for the outline
+    currentX = startX;
+    const rng2 = this.mulberry32(Math.floor(seed * 7919));
+
+    for (let i = 0; i < numCurves; i++) {
+      const nextX = currentX + segmentWidth;
+      const peakOffset = (rng2() - 0.3) * h * 0.8;
+      const cpX1 = currentX + segmentWidth * 0.3;
+      const cpY1 = y - h * 0.3 + peakOffset;
+      const cpX2 = currentX + segmentWidth * 0.7;
+      const cpY2 = y - h * 0.2 + peakOffset * 0.5;
+
+      graphics.bezierCurveTo(cpX1, cpY1, cpX2, cpY2, nextX, y + rng2() * h * 0.2);
+      currentX = nextX;
+    }
+
+    graphics.stroke({
+      width: Math.max(0.5, width * 0.01),
+      color: CLOUD_COLORS.outline,
+      alpha: alpha * 0.4,
+      cap: 'round'
+    });
   }
 
   private drawLandPolygons(graphics: Graphics): void {
