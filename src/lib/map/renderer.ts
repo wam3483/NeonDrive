@@ -799,12 +799,52 @@ export class MapRenderer {
   private drawRivers(graphics: Graphics): void {
     if (!this.mapData) return;
 
+    const riverColor = 0x3068a0;
+
+    // First pass: draw all river segments with round caps
     for (const edge of this.mapData.edges) {
       if (edge.river > 0 && edge.v0 && edge.v1) {
-        const width = Math.sqrt(edge.river) * 1.5;
+        const width = Math.sqrt(edge.river) * 2;
         graphics.moveTo(edge.v0.point.x, edge.v0.point.y);
         graphics.lineTo(edge.v1.point.x, edge.v1.point.y);
-        graphics.stroke({ width, color: 0x3068a0 });
+        graphics.stroke({ width, color: riverColor, cap: 'round', join: 'round' });
+      }
+    }
+
+    // Second pass: draw circles at all river corners to smooth joins
+    // Collect corners that have rivers and their max river width
+    const cornerRiverWidth = new Map<number, number>();
+
+    for (const edge of this.mapData.edges) {
+      if (edge.river > 0) {
+        const width = Math.sqrt(edge.river) * 2;
+
+        if (edge.v0) {
+          const current = cornerRiverWidth.get(edge.v0.index) || 0;
+          cornerRiverWidth.set(edge.v0.index, Math.max(current, width));
+        }
+        if (edge.v1) {
+          const current = cornerRiverWidth.get(edge.v1.index) || 0;
+          cornerRiverWidth.set(edge.v1.index, Math.max(current, width));
+        }
+      }
+    }
+
+    // Draw circles at river junctions
+    for (const corner of this.mapData.corners) {
+      const width = cornerRiverWidth.get(corner.index);
+      if (width && width > 0) {
+        // Count how many river edges touch this corner
+        let riverEdgeCount = 0;
+        for (const edge of corner.protrudes) {
+          if (edge.river > 0) riverEdgeCount++;
+        }
+
+        // Draw join circle if multiple rivers meet or river is thick
+        if (riverEdgeCount >= 2 || width > 3) {
+          graphics.circle(corner.point.x, corner.point.y, width / 2);
+          graphics.fill(riverColor);
+        }
       }
     }
   }
