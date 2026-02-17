@@ -2,6 +2,7 @@
 import { Application, Graphics, Container, Text, TextStyle } from 'pixi.js';
 import type { MapData, Center, Edge } from './generator';
 import type { Town } from './towns';
+import type { Road } from './roads';
 import { BIOME_COLORS } from './types';
 
 // Text styles for town names
@@ -30,6 +31,7 @@ export interface RenderOptions {
   showPolygons: boolean;
   showEdges: boolean;
   showRivers: boolean;
+  showRoads: boolean;
   showElevation: boolean;
   showMoisture: boolean;
   showTowns: boolean;
@@ -39,6 +41,7 @@ const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   showPolygons: true,
   showEdges: false,
   showRivers: true,
+  showRoads: true,
   showElevation: false,
   showMoisture: false,
   showTowns: true,
@@ -123,11 +126,13 @@ export class MapRenderer {
   private shoreGraphics: Graphics | null = null;
   private landGraphics: Graphics | null = null;
   private townGraphics: Graphics | null = null;
+  private roadGraphics: Graphics | null = null;
   private cloudGraphics: Graphics | null = null;
   private oceanCenters: Center[] = [];  // True ocean only
   private lakeCenters: Center[] = [];   // Inland water (lakes, marshes)
   private coastlineEdges: Edge[] = [];
   private towns: Town[] = [];
+  private roads: Road[] = [];
   private clouds: Cloud[] = [];
   private animationTime: number = 0;
   private animationFrame: number = 0;
@@ -371,6 +376,17 @@ export class MapRenderer {
     this.render();
   }
 
+  setRoads(roads: Road[]): void {
+    this.roads = roads;
+    this.render();
+  }
+
+  setTownsAndRoads(towns: Town[], roads: Road[]): void {
+    this.towns = towns;
+    this.roads = roads;
+    this.render();
+  }
+
   render(): void {
     if (!this.mapData || !this.initialized) return;
 
@@ -381,6 +397,7 @@ export class MapRenderer {
     this.shoreGraphics = null;
     this.landGraphics = null;
     this.townGraphics = null;
+    this.roadGraphics = null;
     this.cloudGraphics = null;
 
     // Draw polygons
@@ -422,6 +439,13 @@ export class MapRenderer {
       this.mapContainer.addChild(riverGraphics);
     }
 
+    // Draw roads between rivers and towns
+    if (this.options.showRoads && this.roads.length > 0) {
+      this.roadGraphics = new Graphics();
+      this.drawRoads(this.roadGraphics);
+      this.mapContainer.addChild(this.roadGraphics);
+    }
+
     // Draw towns on very top
     if (this.options.showTowns && this.towns.length > 0) {
       this.townGraphics = new Graphics();
@@ -434,6 +458,71 @@ export class MapRenderer {
       this.cloudGraphics = new Graphics();
       this.drawClouds(this.cloudGraphics, this.animationTime);
       this.mapContainer.addChild(this.cloudGraphics);
+    }
+  }
+
+  private drawRoads(graphics: Graphics): void {
+    const roadEdge = 0x555555;     // Gray road edge
+    const roadSurface = 0x2a2a2a;  // Dark asphalt
+    const lineColor = 0xe8c840;    // Yellow center line
+
+    for (const road of this.roads) {
+      if (road.path.length < 2) continue;
+
+      // Road width based on connected town sizes
+      const sizeScore = (s: string) =>
+        s === 'large' ? 3 : s === 'medium' ? 2 : 1;
+      const importance = sizeScore(road.from.size) + sizeScore(road.to.size);
+      const outerWidth = importance >= 5 ? 6 : importance >= 3 ? 4.5 : 3;
+      const innerWidth = outerWidth - 1.2;
+
+      // Pass 1: gray edge / shoulder
+      graphics.moveTo(road.path[0].x, road.path[0].y);
+      for (let i = 1; i < road.path.length; i++) {
+        graphics.lineTo(road.path[i].x, road.path[i].y);
+      }
+      graphics.stroke({
+        width: outerWidth,
+        color: roadEdge,
+        alpha: 0.85,
+        cap: 'round',
+        join: 'round',
+      });
+
+      // Pass 2: dark asphalt surface
+      graphics.moveTo(road.path[0].x, road.path[0].y);
+      for (let i = 1; i < road.path.length; i++) {
+        graphics.lineTo(road.path[i].x, road.path[i].y);
+      }
+      graphics.stroke({
+        width: innerWidth,
+        color: roadSurface,
+        alpha: 0.9,
+        cap: 'round',
+        join: 'round',
+      });
+
+      // Pass 3: yellow dashed center line as small dots
+      const dotSpacing = 6;
+      const dotRadius = 0.7;
+
+      for (let seg = 0; seg < road.path.length - 1; seg++) {
+        const ax = road.path[seg].x;
+        const ay = road.path[seg].y;
+        const bx = road.path[seg + 1].x;
+        const by = road.path[seg + 1].y;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const segLen = Math.sqrt(dx * dx + dy * dy);
+        if (segLen < 1) continue;
+
+        const steps = Math.floor(segLen / dotSpacing);
+        for (let d = 0; d <= steps; d++) {
+          const t = steps === 0 ? 0.5 : d / steps;
+          graphics.circle(ax + dx * t, ay + dy * t, dotRadius);
+          graphics.fill({ color: lineColor, alpha: 0.9 });
+        }
+      }
     }
   }
 

@@ -4,6 +4,7 @@
     generateMap,
     MapRenderer,
     TownGenerator,
+    generateRoads,
     DEFAULT_CONFIG,
     DEFAULT_TOWN_CONFIG,
   } from '$lib/map';
@@ -23,6 +24,7 @@
   let showTowns = $state(true);
 
   // Render options
+  let showRoads = $state(true);
   let showEdges = $state(false);
   let showElevation = $state(false);
   let showMoisture = $state(false);
@@ -102,7 +104,11 @@
     });
 
     const result = townGenerator.generate();
-    renderer.setTowns(result.towns);
+
+    // Generate road network connecting towns
+    const roadNetwork = generateRoads(result.towns, mapData, seed);
+
+    renderer.setTownsAndRoads(result.towns, roadNetwork.roads);
     townStats = result.stats.byType;
 
     generating = false;
@@ -117,6 +123,7 @@
     if (!renderer) return;
     renderer.setOptions({
       showEdges,
+      showRoads,
       showElevation,
       showMoisture,
       showTowns,
@@ -193,6 +200,10 @@
       <label>
         <input type="checkbox" bind:checked={showTowns} onchange={handleCheckboxChange} />
         Towns
+      </label>
+      <label>
+        <input type="checkbox" bind:checked={showRoads} onchange={handleCheckboxChange} />
+        Roads
       </label>
       <label>
         <input type="checkbox" bind:checked={showEdges} onchange={handleCheckboxChange} />

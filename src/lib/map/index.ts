@@ -8,6 +8,7 @@ export {
   createElevationRule,
 } from './towns';
 export { TownNameGenerator, generateTownNames } from './townNames';
+export { generateRoads } from './roads';
 export type { MapData, MapConfig, Center, Corner, Edge, Graph } from './generator';
 export type { RenderOptions } from './renderer';
 export type {
@@ -17,3 +18,4 @@ export type {
   TownPlacementRule,
   TownGeneratorResult,
 } from './towns';
+export type { Road, RoadNetwork } from './roads';
