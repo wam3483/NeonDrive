@@ -3,6 +3,7 @@ import { Application, Graphics, Container, Text, TextStyle } from 'pixi.js';
 import type { MapData, Center, Edge } from './generator';
 import type { Town } from './towns';
 import type { Road } from './roads';
+import { buildNoisyEdges, buildNoisyPolygon } from './noisyEdges';
 import { BIOME_COLORS } from './types';
 
 // Text styles for town names
@@ -134,6 +135,7 @@ export class MapRenderer {
   private towns: Town[] = [];
   private roads: Road[] = [];
   private clouds: Cloud[] = [];
+  private noisyPolygons: Map<number, number[]> = new Map();
   private animationTime: number = 0;
   private animationFrame: number = 0;
 
@@ -306,6 +308,12 @@ export class MapRenderer {
     this.lakeCenters = mapData.centers.filter(c => c.water && !c.ocean);
     // Cache coastline edges (edges between ocean and land)
     this.coastlineEdges = this.findCoastlineEdges(mapData);
+    // Build noisy edge paths and cache polygon point arrays
+    const noisyEdges = buildNoisyEdges(mapData, mapData.config.seed);
+    this.noisyPolygons = new Map();
+    for (const center of mapData.centers) {
+      this.noisyPolygons.set(center.index, buildNoisyPolygon(center, noisyEdges));
+    }
     // Generate very infrequent clouds
     this.generateClouds(mapData.config.seed);
     this.render();
@@ -890,8 +898,7 @@ export class MapRenderer {
         color = waveInfo.color;
 
         // Draw the polygon
-        const points = center.corners.flatMap((c) => [c.point.x, c.point.y]);
-        graphics.poly(points);
+        graphics.poly(this.getPolygonPoints(center));
         graphics.fill(color);
 
         // Draw white caps on wave crests
@@ -901,8 +908,7 @@ export class MapRenderer {
         continue;
       }
 
-      const points = center.corners.flatMap((c) => [c.point.x, c.point.y]);
-      graphics.poly(points);
+      graphics.poly(this.getPolygonPoints(center));
       graphics.fill(color);
     }
   }
@@ -927,8 +933,7 @@ export class MapRenderer {
         color = LAKE_COLORS.mid;
       }
 
-      const points = center.corners.flatMap((c) => [c.point.x, c.point.y]);
-      graphics.poly(points);
+      graphics.poly(this.getPolygonPoints(center));
       graphics.fill(color);
     }
   }
@@ -1231,10 +1236,20 @@ export class MapRenderer {
         color = BIOME_COLORS[center.biome];
       }
 
-      const points = center.corners.flatMap((c) => [c.point.x, c.point.y]);
-      graphics.poly(points);
+      graphics.poly(this.getPolygonPoints(center));
       graphics.fill(color);
     }
+  }
+
+  private getPolygonPoints(center: Center): number[] {
+    // Water tiles always use clean straight corners
+    if (center.water || center.ocean) {
+      return center.corners.flatMap((c) => [c.point.x, c.point.y]);
+    }
+    return (
+      this.noisyPolygons.get(center.index) ??
+      center.corners.flatMap((c) => [c.point.x, c.point.y])
+    );
   }
 
   private drawEdges(graphics: Graphics): void {

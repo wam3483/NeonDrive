@@ -9,6 +9,7 @@ export {
 } from './towns';
 export { TownNameGenerator, generateTownNames } from './townNames';
 export { generateRoads } from './roads';
+export { buildNoisyEdges, buildNoisyPolygon } from './noisyEdges';
 export type { MapData, MapConfig, Center, Corner, Edge, Graph } from './generator';
 export type { RenderOptions } from './renderer';
 export type {
@@ -19,3 +20,4 @@ export type {
   TownGeneratorResult,
 } from './towns';
 export type { Road, RoadNetwork } from './roads';
+export type { NoisyEdgeData } from './noisyEdges';
