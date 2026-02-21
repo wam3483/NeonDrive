@@ -6,17 +6,23 @@
   let renderer: SunsetRenderer | null = $state(null);
 
   // Config state
-  let seed = $state(42);
-  let sunY = $state(0.35);
-  let sunSize = $state(80);
-  let gridSpeed = $state(1);
-  let starDensity = $state(150);
+  let seed          = $state(42);
+  let sunY          = $state(0.35);
+  let sunSize       = $state(80);
+  let sunStripes    = $state(true);
+  let gridSpeed     = $state(1);
+  let starDensity   = $state(150);
   let mountainHeight = $state(0.25);
-  let showGrid = $state(true);
-  let showStars = $state(true);
+  let mountainLayers = $state(3);
+  let cloudDensity  = $state(0.6);
+  let showGrid      = $state(true);
+  let showStars     = $state(true);
   let showMountains = $state(true);
+  let showClouds    = $state(true);
+  let showTrees     = $state(true);
+  let palette       = $state<'auto'|'ember'|'dusk'|'amber'|'neon'>('auto');
 
-  const width = 800;
+  const width  = 800;
   const height = 600;
 
   async function initRenderer() {
@@ -29,47 +35,54 @@
   function updateConfig() {
     if (!renderer) return;
     renderer.setConfig({
-      seed,
-      sunY,
-      sunSize,
-      gridSpeed,
-      starDensity,
-      mountainHeight,
-      showGrid,
-      showStars,
-      showMountains,
+      seed, sunY, sunSize, sunStripes,
+      gridSpeed, starDensity,
+      mountainHeight, mountainLayers,
+      cloudDensity,
+      showGrid, showStars, showMountains, showClouds, showTrees,
+      palette,
     });
   }
 
   function randomSeed() {
-    seed = Math.floor(Math.random() * 1000000);
+    seed = Math.floor(Math.random() * 1_000_000);
     updateConfig();
   }
 
-  onMount(() => {
-    initRenderer();
-  });
-
-  onDestroy(() => {
-    if (renderer) {
-      renderer.destroy();
-    }
-  });
+  onMount(() => { initRenderer(); });
+  onDestroy(() => { renderer?.destroy(); });
 </script>
 
 <div class="sunset-container">
   <div class="controls">
+
+    <!-- Seed -->
     <div class="control-group">
       <label>
-        Seed:
+        Seed
         <input type="number" bind:value={seed} onchange={updateConfig} />
       </label>
       <button onclick={randomSeed}>Random</button>
     </div>
 
+    <!-- Palette -->
     <div class="control-group">
       <label>
-        Sun Position:
+        Palette
+        <select bind:value={palette} onchange={updateConfig}>
+          <option value="auto">Auto</option>
+          <option value="ember">Ember</option>
+          <option value="dusk">Dusk</option>
+          <option value="amber">Amber</option>
+          <option value="neon">Neon</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Sun -->
+    <div class="control-group">
+      <label>
+        Sun Y
         <input type="range" min="0" max="1" step="0.01" bind:value={sunY} onchange={updateConfig} />
         <span>{sunY.toFixed(2)}</span>
       </label>
@@ -77,31 +90,16 @@
 
     <div class="control-group">
       <label>
-        Sun Size:
+        Sun Size
         <input type="range" min="20" max="150" step="1" bind:value={sunSize} onchange={updateConfig} />
         <span>{sunSize}</span>
       </label>
     </div>
 
+    <!-- Mountains -->
     <div class="control-group">
       <label>
-        Grid Speed:
-        <input type="range" min="0" max="5" step="0.1" bind:value={gridSpeed} onchange={updateConfig} />
-        <span>{gridSpeed.toFixed(1)}</span>
-      </label>
-    </div>
-
-    <div class="control-group">
-      <label>
-        Stars:
-        <input type="range" min="0" max="300" step="10" bind:value={starDensity} onchange={updateConfig} />
-        <span>{starDensity}</span>
-      </label>
-    </div>
-
-    <div class="control-group">
-      <label>
-        Mountain Height:
+        Mtn Height
         <input type="range" min="0" max="1" step="0.05" bind:value={mountainHeight} onchange={updateConfig} />
         <span>{mountainHeight.toFixed(2)}</span>
       </label>
@@ -109,18 +107,49 @@
 
     <div class="control-group">
       <label>
-        <input type="checkbox" bind:checked={showGrid} onchange={updateConfig} />
-        Grid
-      </label>
-      <label>
-        <input type="checkbox" bind:checked={showStars} onchange={updateConfig} />
-        Stars
-      </label>
-      <label>
-        <input type="checkbox" bind:checked={showMountains} onchange={updateConfig} />
-        Mountains
+        Mtn Layers
+        <input type="range" min="1" max="3" step="1" bind:value={mountainLayers} onchange={updateConfig} />
+        <span>{mountainLayers}</span>
       </label>
     </div>
+
+    <!-- Clouds -->
+    <div class="control-group">
+      <label>
+        Clouds
+        <input type="range" min="0" max="1" step="0.05" bind:value={cloudDensity} onchange={updateConfig} />
+        <span>{cloudDensity.toFixed(2)}</span>
+      </label>
+    </div>
+
+    <!-- Stars -->
+    <div class="control-group">
+      <label>
+        Stars
+        <input type="range" min="0" max="300" step="10" bind:value={starDensity} onchange={updateConfig} />
+        <span>{starDensity}</span>
+      </label>
+    </div>
+
+    <!-- Grid speed -->
+    <div class="control-group">
+      <label>
+        Grid Speed
+        <input type="range" min="0" max="5" step="0.1" bind:value={gridSpeed} onchange={updateConfig} />
+        <span>{gridSpeed.toFixed(1)}</span>
+      </label>
+    </div>
+
+    <!-- Toggles -->
+    <div class="control-group toggles">
+      <label><input type="checkbox" bind:checked={showGrid}      onchange={updateConfig} /> Grid</label>
+      <label><input type="checkbox" bind:checked={showStars}     onchange={updateConfig} /> Stars</label>
+      <label><input type="checkbox" bind:checked={showMountains} onchange={updateConfig} /> Mountains</label>
+      <label><input type="checkbox" bind:checked={showClouds}    onchange={updateConfig} /> Clouds</label>
+      <label><input type="checkbox" bind:checked={showTrees}     onchange={updateConfig} /> Trees</label>
+      <label><input type="checkbox" bind:checked={sunStripes}    onchange={updateConfig} /> Sun Stripes</label>
+    </div>
+
   </div>
 
   <div class="canvas-wrapper">
@@ -141,72 +170,84 @@
   .controls {
     display: flex;
     flex-wrap: wrap;
-    gap: 1rem;
+    gap: 0.75rem 1.25rem;
     align-items: center;
-    padding: 1rem;
+    padding: 0.875rem 1rem;
     background: #1a1a2e;
     border-radius: 8px;
     color: #fff;
+    max-width: 820px;
+    width: 100%;
   }
 
   .control-group {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
+  }
+
+  .toggles {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.9rem;
   }
 
   label {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
     cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
   }
 
   input[type='number'] {
-    width: 100px;
-    padding: 0.25rem 0.5rem;
+    width: 80px;
+    padding: 0.2rem 0.4rem;
     border: 1px solid #444;
     border-radius: 4px;
     background: #2a2a4e;
     color: #fff;
+    font-size: 0.85rem;
   }
 
-  input[type='range'] {
-    width: 100px;
-  }
+  input[type='range'] { width: 90px; }
 
-  input[type='checkbox'] {
+  input[type='checkbox'] { cursor: pointer; }
+
+  select {
+    padding: 0.2rem 0.4rem;
+    border: 1px solid #444;
+    border-radius: 4px;
+    background: #2a2a4e;
+    color: #fff;
+    font-size: 0.85rem;
     cursor: pointer;
   }
 
   span {
-    min-width: 2.5rem;
-    font-size: 0.85rem;
+    min-width: 2.2rem;
+    font-size: 0.8rem;
     color: #aaa;
   }
 
   button {
-    padding: 0.5rem 1rem;
+    padding: 0.35rem 0.75rem;
     border: none;
     border-radius: 4px;
     background: #4a4a8e;
     color: #fff;
     cursor: pointer;
-    transition: background 0.2s;
+    font-size: 0.85rem;
+    transition: background 0.15s;
   }
 
-  button:hover {
-    background: #5a5aae;
-  }
+  button:hover { background: #5a5aae; }
 
   .canvas-wrapper {
-    position: relative;
     border-radius: 8px;
     overflow: hidden;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
   }
 
-  canvas {
-    display: block;
-  }
+  canvas { display: block; }
 </style>
