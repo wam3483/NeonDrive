@@ -20,7 +20,8 @@
   let showMountains = $state(true);
   let showClouds    = $state(true);
   let showTrees     = $state(true);
-  let palette       = $state<'auto'|'ember'|'dusk'|'amber'|'neon'>('auto');
+  let palette       = $state<'auto'|'ember'|'dusk'|'amber'|'neon'|'terra'>('auto');
+  let cloudStyle    = $state<'auto'|'puff'|'wispy'>('auto');
 
   const width  = 800;
   const height = 600;
@@ -40,7 +41,7 @@
       mountainHeight, mountainLayers,
       cloudDensity,
       showGrid, showStars, showMountains, showClouds, showTrees,
-      palette,
+      palette, cloudStyle,
     });
   }
 
@@ -75,6 +76,7 @@
           <option value="dusk">Dusk</option>
           <option value="amber">Amber</option>
           <option value="neon">Neon</option>
+          <option value="terra">Terra</option>
         </select>
       </label>
     </div>
@@ -119,6 +121,17 @@
         Clouds
         <input type="range" min="0" max="1" step="0.05" bind:value={cloudDensity} onchange={updateConfig} />
         <span>{cloudDensity.toFixed(2)}</span>
+      </label>
+    </div>
+
+    <div class="control-group">
+      <label>
+        Cloud Style
+        <select bind:value={cloudStyle} onchange={updateConfig}>
+          <option value="auto">Auto</option>
+          <option value="puff">Puff</option>
+          <option value="wispy">Wispy</option>
+        </select>
       </label>
     </div>
 

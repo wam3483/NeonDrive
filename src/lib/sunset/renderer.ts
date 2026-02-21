@@ -17,13 +17,14 @@ export interface SunsetConfig {
   showMountains: boolean;
   showClouds: boolean;
   showTrees: boolean;
-  palette: 'auto' | 'ember' | 'dusk' | 'amber' | 'neon';
+  palette: 'auto' | 'ember' | 'dusk' | 'amber' | 'neon' | 'terra';
+  cloudStyle: 'auto' | 'puff' | 'wispy';
 }
 
 // -----------------------------------------------------------------------
 // Palettes — derived from the 4 reference images
 // -----------------------------------------------------------------------
-interface PaletteConfig {
+export interface PaletteConfig {
   skyBands: Array<{ stop: number; color: [number, number, number] }>;
   cloudShadow: number;
   cloudMid: number;
@@ -98,9 +99,25 @@ const PALETTES: Record<string, PaletteConfig> = {
     horizonGlow:    0xff20a0,
     horizonCore:    0xff60c0,
   },
+  // earthy tones matching the polygon map generator palette
+  terra: {
+    skyBands: [
+      { stop: 0.00, color: [20,  42,  72] },   // deep ocean navy
+      { stop: 0.25, color: [56,  60, 110] },   // muted blue-purple
+      { stop: 0.50, color: [88, 100,  90] },   // grey-green transition
+      { stop: 0.75, color: [165, 140, 105] },  // warm sandy
+      { stop: 1.00, color: [210, 185, 130] },  // desert sand glow
+    ],
+    cloudShadow:    0x2f4f3f,  // dark teal-forest
+    cloudMid:       0x688860,  // olive-green
+    cloudHighlight: 0xc0b888,  // warm tundra
+    gridColor:      0x4080c0,  // ocean wave blue
+    horizonGlow:    0xc09060,  // warm sandy glow
+    horizonCore:    0xd2b98b,  // desert sand
+  },
 };
 
-const PALETTE_NAMES = ['ember', 'dusk', 'amber', 'neon'] as const;
+const PALETTE_NAMES = ['ember', 'dusk', 'amber', 'neon', 'terra'] as const;
 
 // -----------------------------------------------------------------------
 // Procedural data types
@@ -116,6 +133,15 @@ interface CloudPuff {
 
 interface Cloud {
   puffs: CloudPuff[];
+  speed: number;
+}
+
+interface WispyCloud {
+  x: number;
+  y: number;
+  scale: number;
+  layers: number;  // wispy sub-layers
+  seed: number;
   speed: number;
 }
 
@@ -152,26 +178,28 @@ const DEFAULT_CONFIG: SunsetConfig = {
   showClouds:    true,
   showTrees:     true,
   palette:       'auto',
+  cloudStyle:    'auto',
 };
 
 // -----------------------------------------------------------------------
 // Renderer
 // -----------------------------------------------------------------------
 export class SunsetRenderer {
-  private app: Application;
-  private container: Container;
+  protected app: Application;
+  protected container: Container;
   private config: SunsetConfig;
-  private initialized = false;
-  private width = 0;
-  private height = 0;
+  protected initialized = false;
+  protected width = 0;
+  protected height = 0;
 
   // Procedural data
   private stars: Star[] = [];
   private mountainLayers: MountainLayer[] = [];
   private clouds: Cloud[] = [];
+  private wispyClouds: WispyCloud[] = [];
   private trees: Tree[] = [];
 
-  private animationTime = 0;
+  protected animationTime = 0;
 
   constructor() {
     this.app = new Application();
@@ -209,7 +237,8 @@ export class SunsetRenderer {
       prev.starDensity   !== this.config.starDensity   ||
       prev.mountainHeight !== this.config.mountainHeight ||
       prev.mountainLayers !== this.config.mountainLayers ||
-      prev.cloudDensity  !== this.config.cloudDensity;
+      prev.cloudDensity  !== this.config.cloudDensity  ||
+      prev.cloudStyle    !== this.config.cloudStyle;
 
     if (needsRegen) this.generate();
     this.render();
@@ -226,10 +255,15 @@ export class SunsetRenderer {
   // -----------------------------------------------------------------------
   // Palette helpers
   // -----------------------------------------------------------------------
-  private getActivePalette(): PaletteConfig {
+  protected getActivePalette(): PaletteConfig {
     if (this.config.palette !== 'auto') return PALETTES[this.config.palette];
     const idx = new Random(this.config.seed + 7777).int(0, PALETTE_NAMES.length - 1);
     return PALETTES[PALETTE_NAMES[idx]];
+  }
+
+  private getActiveCloudStyle(): 'puff' | 'wispy' {
+    if (this.config.cloudStyle !== 'auto') return this.config.cloudStyle;
+    return new Random(this.config.seed + 5555).float(0, 1) < 0.5 ? 'puff' : 'wispy';
   }
 
   private getSkyColorAtY(t: number, palette: PaletteConfig): [number, number, number] {
@@ -264,6 +298,7 @@ export class SunsetRenderer {
     this.generateStars(rng);
     this.generateMountainLayers(rng);
     this.generateClouds(rng);
+    this.generateWispyClouds(rng);
     this.generateTrees(rng);
   }
 
@@ -374,6 +409,32 @@ export class SunsetRenderer {
     }
   }
 
+  private generateWispyClouds(rng: Random): void {
+    this.wispyClouds = [];
+    if (this.config.cloudDensity <= 0) return;
+
+    const count    = Math.round(2 + this.config.cloudDensity * 6);
+    const horizonY = this.height * 0.55;
+
+    for (let i = 0; i < count; i++) {
+      // Spread across screen, preferring sides to frame the sun
+      let x: number;
+      const roll = rng.float(0, 1);
+      if (roll < 0.35)      x = rng.float(-60, this.width * 0.35);
+      else if (roll < 0.70) x = rng.float(this.width * 0.65, this.width + 60);
+      else                   x = rng.float(this.width * 0.15, this.width * 0.85);
+
+      this.wispyClouds.push({
+        x,
+        y:      rng.float(horizonY * 0.05, horizonY * 0.55),
+        scale:  0.5 + rng.float(0, 1) * 0.9,
+        layers: 2 + rng.int(0, 2),
+        seed:   rng.float(0, 10000),
+        speed:  0.02 + rng.float(0, 0.04),
+      });
+    }
+  }
+
   private generateTrees(rng: Random): void {
     this.trees = [];
     const baseY = this.height * 0.55;
@@ -398,7 +459,7 @@ export class SunsetRenderer {
   // -----------------------------------------------------------------------
   // Rendering
   // -----------------------------------------------------------------------
-  private render(): void {
+  protected render(): void {
     if (!this.initialized) return;
     this.container.removeChildren();
 
@@ -503,6 +564,14 @@ export class SunsetRenderer {
   }
 
   private renderCloudGraphics(g: Graphics, palette: PaletteConfig): void {
+    if (this.getActiveCloudStyle() === 'wispy') {
+      this.renderWispyClouds(g, palette);
+    } else {
+      this.renderPuffClouds(g, palette);
+    }
+  }
+
+  private renderPuffClouds(g: Graphics, palette: PaletteConfig): void {
     const wrapW = this.width + 600;
     for (const cloud of this.clouds) {
       const drift = (this.animationTime * cloud.speed * 8) % wrapW;
@@ -529,6 +598,162 @@ export class SunsetRenderer {
         g.fill({ color: palette.cloudHighlight, alpha: 0.42 });
       }
     }
+  }
+
+  // --- Wispy / Asian-art-style clouds (adapted from polygon map renderer) ---
+
+  private renderWispyClouds(g: Graphics, palette: PaletteConfig): void {
+    for (const cloud of this.wispyClouds) {
+      const driftX = cloud.x + this.animationTime * cloud.speed * 20;
+      const wrappedX = ((driftX + 200) % (this.width + 400)) - 200;
+      const bobY = cloud.y + Math.sin(this.animationTime * 0.02 + cloud.seed) * 4;
+
+      this.drawWispyCloud(g, wrappedX, bobY, cloud.scale, cloud.layers, cloud.seed, palette);
+    }
+  }
+
+  private drawWispyCloud(
+    g: Graphics, x: number, y: number,
+    scale: number, layers: number, seed: number,
+    palette: PaletteConfig,
+  ): void {
+    const rng       = this.mulberry32(Math.floor(seed));
+    const baseWidth = 80 * scale;
+    const baseHeight = 28 * scale;
+
+    // Multiple layered wisps stacked vertically
+    for (let layer = 0; layer < layers; layer++) {
+      const layerOffset = layer * 8 * scale;
+      const layerY      = y + layerOffset;
+      const layerScale  = 1 - layer * 0.15;
+      const alpha       = 0.55 - layer * 0.1;
+
+      this.drawCloudWisp(
+        g,
+        x - baseWidth * 0.3 * layerScale + rng() * 20,
+        layerY,
+        baseWidth * layerScale,
+        baseHeight * layerScale * (0.8 + rng() * 0.4),
+        alpha,
+        seed + layer,
+        palette,
+      );
+    }
+
+    // Smaller accent wisps for organic feel
+    const numAccents = 1 + Math.floor(rng() * 2);
+    for (let i = 0; i < numAccents; i++) {
+      this.drawCloudWisp(
+        g,
+        x + (rng() - 0.5) * baseWidth * 1.5,
+        y + rng() * baseHeight * 0.5,
+        baseWidth * (0.3 + rng() * 0.3),
+        baseHeight * (0.3 + rng() * 0.3) * 0.6,
+        0.3,
+        seed + 100 + i,
+        palette,
+      );
+    }
+  }
+
+  private drawCloudWisp(
+    g: Graphics, x: number, y: number,
+    width: number, height: number, alpha: number,
+    seed: number, palette: PaletteConfig,
+  ): void {
+    const rng = this.mulberry32(Math.floor(seed * 7919));
+
+    // Subtle breathing
+    const breathe = 1 + Math.sin(this.animationTime * 0.03 + seed * 0.1) * 0.04;
+    const w = width * breathe;
+    const h = height * breathe;
+
+    const numCurves    = 3 + Math.floor(rng() * 2);
+    const segmentWidth = w / numCurves;
+
+    // Start point — left side
+    const startX = x;
+    const startY = y + h * 0.3;
+
+    // --- Filled shape ---
+    g.moveTo(startX, startY);
+
+    // Top edge — flowing bezier curves going right
+    let currentX = startX;
+    for (let i = 0; i < numCurves; i++) {
+      const nextX      = currentX + segmentWidth;
+      const peakOffset = (rng() - 0.3) * h * 0.8;
+      g.bezierCurveTo(
+        currentX + segmentWidth * 0.3, y - h * 0.3 + peakOffset,
+        currentX + segmentWidth * 0.7, y - h * 0.2 + peakOffset * 0.5,
+        nextX, y + rng() * h * 0.2,
+      );
+      currentX = nextX;
+    }
+
+    // Right curl (characteristic of Asian clouds)
+    const curlX = currentX + w * 0.1;
+    const curlY = y + h * 0.4;
+    g.bezierCurveTo(
+      currentX + w * 0.05, y + h * 0.1,
+      curlX, y + h * 0.2,
+      curlX - w * 0.05, curlY,
+    );
+
+    // Bottom edge — gentler curves going back left
+    currentX = curlX - w * 0.05;
+    for (let i = 0; i < numCurves; i++) {
+      const nextX = currentX - segmentWidth;
+      const dip   = rng() * h * 0.3;
+      g.bezierCurveTo(
+        currentX - segmentWidth * 0.3, y + h * 0.5 + dip,
+        currentX - segmentWidth * 0.7, y + h * 0.4 + dip * 0.5,
+        nextX, y + h * 0.3 + rng() * h * 0.1,
+      );
+      currentX = nextX;
+    }
+
+    // Close back to start with a small curl
+    g.bezierCurveTo(
+      startX - w * 0.05, y + h * 0.4,
+      startX - w * 0.03, y + h * 0.35,
+      startX, startY,
+    );
+
+    g.fill({ color: palette.cloudMid, alpha: alpha * 0.85 });
+
+    // --- Ink-painting outline along the top edge ---
+    const rng2 = this.mulberry32(Math.floor(seed * 7919));
+    g.moveTo(startX, startY);
+
+    currentX = startX;
+    for (let i = 0; i < numCurves; i++) {
+      const nextX      = currentX + segmentWidth;
+      const peakOffset = (rng2() - 0.3) * h * 0.8;
+      g.bezierCurveTo(
+        currentX + segmentWidth * 0.3, y - h * 0.3 + peakOffset,
+        currentX + segmentWidth * 0.7, y - h * 0.2 + peakOffset * 0.5,
+        nextX, y + rng2() * h * 0.2,
+      );
+      currentX = nextX;
+    }
+
+    g.stroke({
+      width: Math.max(0.5, width * 0.012),
+      color: palette.cloudHighlight,
+      alpha: alpha * 0.5,
+      cap: 'round',
+    });
+  }
+
+  /** Simple seeded RNG for cloud shape variation */
+  private mulberry32(seed: number): () => number {
+    return function () {
+      let t = (seed += 0x6d2b79f5);
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
   }
 
   private updateClouds(): void {
@@ -655,7 +880,7 @@ export class SunsetRenderer {
   // -----------------------------------------------------------------------
   // Animation
   // -----------------------------------------------------------------------
-  private animate(ticker: { deltaTime: number }): void {
+  protected animate(ticker: { deltaTime: number }): void {
     if (!this.initialized) return;
     this.animationTime += ticker.deltaTime * 0.02;
     this.updateStars();
@@ -746,7 +971,7 @@ export class SunsetRenderer {
     }
   }
 
-  private findByLabel(label: string): Graphics | null {
+  protected findByLabel(label: string): Graphics | null {
     for (const child of this.container.children) {
       if (child.label === label) return child as Graphics;
     }

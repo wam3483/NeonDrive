@@ -1,2 +1,2 @@
 export { SunsetRenderer } from './renderer';
-export type { SunsetConfig } from './renderer';
+export type { SunsetConfig, PaletteConfig } from './renderer';
