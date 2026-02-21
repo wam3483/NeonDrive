@@ -314,366 +314,316 @@ export class DriveGameRenderer extends SunsetRenderer {
   }
 
   // ---------------------------------------------------------------------------
-  // Sport car — low & wide, rear wing, four circular taillights
+  // Sport car — Countach-style wide-body exotic, navy/steel blue
   // ---------------------------------------------------------------------------
   private renderSportCar(g: Graphics): void {
     const { x, y, scale } = this.getCarScreenPos();
     const palette = this.getActivePalette();
     const s = scale;
-
-    // 3x base dimensions — wider and lower than classic
-    const w = 295 * s;
-    const bodyH = 85 * s;
-    const cabinH = 56 * s;
-    const diffuserH = 18 * s;
-    const fenderBulge = 10 * s;
     const pulseAlpha = 0.3 + 0.25 * Math.sin(this.animationTime * 2.5);
 
-    const bodyTop  = y - bodyH;
-    const bodyLeft = x - w / 2;
+    const w          = 310 * s;   // very wide
+    const bodyH      = 76 * s;    // main rear body panel height
+    const cabinH     = 36 * s;    // very low fastback
+    const diffuserH  = 30 * s;    // tall lower bumper/diffuser
+    const haunch     = 18 * s;    // fender flare beyond body width
 
-    // --- Road reflection ---
-    for (let i = 8; i >= 0; i--) {
-      const spread = (i + 1) * 9 * s;
-      const alpha = 0.05 * (1 - i / 8);
-      g.rect(bodyLeft - spread * 0.5, y, w + spread, spread + 3 * s);
-      g.fill({ color: 0xff2040, alpha });
+    const carBottom = y - 20 * s;   // ground clearance — lifts car off road
+    const bodyTop   = carBottom - bodyH;
+    const bodyLeft  = x - w / 2;
+
+    // -----------------------------------------------------------------------
+    // Road reflection
+    // -----------------------------------------------------------------------
+    for (let i = 6; i >= 0; i--) {
+      const sp = (i + 1) * 7 * s;
+      g.rect(bodyLeft - haunch - sp * 0.4, y, w + haunch * 2 + sp * 0.8, sp + 2 * s);
+      g.fill({ color: 0xff4020, alpha: 0.04 * (1 - i / 6) });
     }
 
-    // --- Neon underglow ---
-    for (let i = 7; i >= 0; i--) {
-      const spread = (i + 1) * 6 * s;
-      const alpha = 0.08 * (1 - i / 7);
-      g.rect(bodyLeft - spread - fenderBulge, y - 3 * s, w + (spread + fenderBulge) * 2, spread + 3 * s);
-      g.fill({ color: palette.gridColor, alpha });
+    // -----------------------------------------------------------------------
+    // Wheels — from behind, tires look like wide flat rectangles (tread face)
+    // Drawn before body so haunches overlap the upper portion naturally
+    // -----------------------------------------------------------------------
+    const tireW  = 46 * s;   // wide rear tyre
+    const tireH  = 22 * s;   // visible height from ground up
+    const tireTop = y - tireH;
+
+    // Left tyre — centred just inside the body edge, haunch hangs over it
+    const tLX = bodyLeft - tireW * 0.3;
+    // Right tyre — mirror
+    const tRX = bodyLeft + w - tireW * 0.7;
+
+    for (const tx of [tLX, tRX]) {
+      // Tread face
+      g.rect(tx, tireTop, tireW, tireH);
+      g.fill(0x0b0b14);
+      // Subtle tread highlight along top edge
+      g.moveTo(tx + 2 * s, tireTop + 1.5 * s);
+      g.lineTo(tx + tireW - 2 * s, tireTop + 1.5 * s);
+      g.stroke({ width: 1 * s, color: 0x1c1c28, alpha: 0.8 });
+      // Outer tyre sidewall edge lines
+      g.rect(tx, tireTop, tireW, tireH);
+      g.stroke({ width: 1 * s, color: 0x181820, alpha: 0.6 });
     }
 
-    // --- Rear diffuser ---
-    const diffLeft = bodyLeft + 10 * s;
-    const diffW = w - 20 * s;
-    g.rect(diffLeft, y - diffuserH, diffW, diffuserH);
-    g.fill(0x060614);
-    // Diffuser slats
-    const slats = 10;
-    const slatArea = diffW - 8 * s;
-    for (let i = 0; i <= slats; i++) {
-      const sx = diffLeft + 4 * s + (i / slats) * slatArea;
-      g.moveTo(sx, y - diffuserH + 2 * s);
-      g.lineTo(sx, y - 2 * s);
-      g.stroke({ width: 1 * s, color: 0x1a1a38, alpha: 0.7 });
-    }
-    // Diffuser outline
-    g.rect(diffLeft, y - diffuserH, diffW, diffuserH);
-    g.stroke({ width: 0.6 * s, color: 0x2a2a50, alpha: 0.5 });
+    // -----------------------------------------------------------------------
+    // Diffuser / lower bumper section
+    // -----------------------------------------------------------------------
+    const diffLeft = bodyLeft - haunch;
+    const diffW    = w + haunch * 2;
+    const diffTop  = carBottom - diffuserH;
 
-    // --- Main body with flared fenders ---
+    g.rect(diffLeft, diffTop, diffW, diffuserH);
+    g.fill(0x07070e);
+
+    // Four large rectangular exhaust outlets: 2 per side
+    const exhW = 30 * s;
+    const exhH = diffuserH * 0.52;
+    const exhY = diffTop + diffuserH * 0.24;
+    const exhGap = 5 * s;
+    // Left pair (inner, then outer from center)
+    g.rect(diffLeft + 10 * s, exhY, exhW, exhH);
+    g.fill(0x0c0c1e);
+    g.rect(diffLeft + 10 * s + exhW + exhGap, exhY, exhW, exhH);
+    g.fill(0x0c0c1e);
+    // Right pair
+    g.rect(diffLeft + diffW - 10 * s - exhW, exhY, exhW, exhH);
+    g.fill(0x0c0c1e);
+    g.rect(diffLeft + diffW - 10 * s - exhW * 2 - exhGap, exhY, exhW, exhH);
+    g.fill(0x0c0c1e);
+
+    // Center diffuser vertical fins
+    const finL = diffLeft + 10 * s + (exhW * 2 + exhGap) + 10 * s;
+    const finR = diffLeft + diffW - 10 * s - (exhW * 2 + exhGap) - 10 * s;
+    for (let i = 0; i <= 5; i++) {
+      const fx = finL + (i / 5) * (finR - finL);
+      g.moveTo(fx, diffTop + 3 * s);
+      g.lineTo(fx, carBottom - 2 * s);
+      g.stroke({ width: 0.7 * s, color: 0x14183a, alpha: 0.6 });
+    }
+
+    g.rect(diffLeft, diffTop, diffW, diffuserH);
+    g.stroke({ width: 0.8 * s, color: 0x1c2248, alpha: 0.5 });
+
+    // -----------------------------------------------------------------------
+    // Rear fender haunches — flat flares
+    // -----------------------------------------------------------------------
+    for (const side of [-1, 1]) {
+      const bx = side === -1 ? bodyLeft : bodyLeft + w;
+      g.poly([
+        bx,                   bodyTop + bodyH * 0.22,
+        bx + side * haunch,   bodyTop + bodyH * 0.50,
+        bx + side * haunch,   diffTop,
+        bx,                   diffTop,
+      ]);
+      g.fill(0x0c1026);
+      g.moveTo(bx + side * haunch - side * 1.5 * s, bodyTop + bodyH * 0.52);
+      g.lineTo(bx + side * haunch - side * 1.5 * s, diffTop);
+      g.stroke({ width: 1.2 * s, color: 0x243858, alpha: 0.55 });
+    }
+
+    // -----------------------------------------------------------------------
+    // Main body panel — dark navy/steel blue, rounded top corners
+    // -----------------------------------------------------------------------
+    const cr = 16 * s;  // top corner radius
+    g.moveTo(bodyLeft, diffTop);
+    g.lineTo(bodyLeft, bodyTop + cr);
+    g.arcTo(bodyLeft, bodyTop, bodyLeft + cr, bodyTop, cr);
+    g.lineTo(bodyLeft + w - cr, bodyTop);
+    g.arcTo(bodyLeft + w, bodyTop, bodyLeft + w, bodyTop + cr, cr);
+    g.lineTo(bodyLeft + w, diffTop);
+    g.closePath();
+    g.fill(0x0d1228);
+
+    // Top edge highlight follows the rounded top
+    g.moveTo(bodyLeft + cr + 2 * s, bodyTop + 1.5 * s);
+    g.lineTo(bodyLeft + w - cr - 2 * s, bodyTop + 1.5 * s);
+    g.stroke({ width: 1.2 * s, color: 0x2a3c60, alpha: 0.55 });
+
+    // -----------------------------------------------------------------------
+    // Wide horizontal rear grille/vent panel — spans most of body width
+    // Sits in upper portion of body, between the taillight clusters
+    // -----------------------------------------------------------------------
+    const tailR     = 10 * s;
+    const tailGap   = 6 * s;
+    const tailInset = 10 * s;
+    // cluster width = tailR + tailGap + tailR (two lights side by side)
+    const clusterW  = tailR * 2 + tailGap + tailR * 2;
+
+    const ventL   = bodyLeft + tailInset + clusterW + 8 * s;
+    const ventR   = bodyLeft + w - tailInset - clusterW - 8 * s;
+    const ventW   = ventR - ventL;
+    const ventTop = bodyTop + 6 * s;
+    const ventH   = bodyH * 0.68;
+
+    if (ventW > 20 * s) {
+      g.rect(ventL, ventTop, ventW, ventH);
+      g.fill(0x08090e);
+
+      // Horizontal louvre slats
+      const numSlats = 9;
+      const slatH    = ventH / numSlats;
+      for (let i = 0; i < numSlats; i++) {
+        const sy = ventTop + i * slatH;
+        g.rect(ventL + 2 * s, sy, ventW - 4 * s, slatH * 0.45);
+        g.fill(0x050508);
+        g.rect(ventL + 2 * s, sy + slatH * 0.45, ventW - 4 * s, slatH * 0.55);
+        g.fill(0x0b0d1a);
+        g.moveTo(ventL + 2 * s, sy + slatH * 0.45);
+        g.lineTo(ventR - 2 * s, sy + slatH * 0.45);
+        g.stroke({ width: 0.5 * s, color: 0x203050, alpha: 0.4 });
+      }
+      g.rect(ventL, ventTop, ventW, ventH);
+      g.stroke({ width: 0.8 * s, color: 0x192040, alpha: 0.6 });
+    }
+
+    // -----------------------------------------------------------------------
+    // Four circular taillights — two left cluster, two right cluster
+    // -----------------------------------------------------------------------
+    const tailY = bodyTop + 20 * s;
+
+    // Left cluster (left light outermost, right light toward center)
+    const tL1 = bodyLeft + tailInset + tailR;
+    const tL2 = tL1 + tailR + tailGap + tailR;
+    // Right cluster (mirror)
+    const tR1 = bodyLeft + w - tailInset - tailR;
+    const tR2 = tR1 - (tailR + tailGap + tailR);
+
+    this.drawCircleTaillight(g, tL1, tailY, tailR, s, palette);
+    this.drawCircleTaillight(g, tL2, tailY, tailR, s, palette);
+    this.drawCircleTaillight(g, tR2, tailY, tailR, s, palette);
+    this.drawCircleTaillight(g, tR1, tailY, tailR, s, palette);
+
+    // -----------------------------------------------------------------------
+    // Lower bumper strip (dark horizontal band above diffuser)
+    // -----------------------------------------------------------------------
+    const stripTop = bodyTop + bodyH * 0.72;
+    const stripH   = diffTop - stripTop;
+    if (stripH > 0) {
+      g.rect(bodyLeft, stripTop, w, stripH);
+      g.fill(0x090b18);
+      g.rect(bodyLeft + 6 * s, stripTop + 3 * s, w - 12 * s, stripH * 0.55);
+      g.fill(0x060810);
+    }
+
+    // -----------------------------------------------------------------------
+    // Cabin — very low fastback, thick raked C-pillars
+    // -----------------------------------------------------------------------
+    const cabInset    = w * 0.21;
+    const cabTopInset = w * 0.30;
+    const cabinTop    = bodyTop - cabinH;
+
     g.poly([
-      bodyLeft - fenderBulge, y - diffuserH,
-      bodyLeft - fenderBulge, bodyTop + bodyH * 0.5,
-      bodyLeft - fenderBulge * 0.3, bodyTop + bodyH * 0.2,
-      bodyLeft, bodyTop,
-      bodyLeft + w, bodyTop,
-      bodyLeft + w + fenderBulge * 0.3, bodyTop + bodyH * 0.2,
-      bodyLeft + w + fenderBulge, bodyTop + bodyH * 0.5,
-      bodyLeft + w + fenderBulge, y - diffuserH,
-    ]);
-    g.fill(0x141430);
-
-    // Fender highlight (vertical light catch on bulge)
-    g.moveTo(bodyLeft - fenderBulge + 2 * s, bodyTop + bodyH * 0.55);
-    g.lineTo(bodyLeft - fenderBulge + 2 * s, y - diffuserH - 2 * s);
-    g.stroke({ width: 1 * s, color: 0x28284e, alpha: 0.6 });
-    g.moveTo(bodyLeft + w + fenderBulge - 2 * s, bodyTop + bodyH * 0.55);
-    g.lineTo(bodyLeft + w + fenderBulge - 2 * s, y - diffuserH - 2 * s);
-    g.stroke({ width: 1 * s, color: 0x28284e, alpha: 0.6 });
-
-    // Body creases
-    const crease1Y = bodyTop + bodyH * 0.35;
-    const crease2Y = bodyTop + bodyH * 0.6;
-    g.moveTo(bodyLeft - fenderBulge + 4 * s, crease1Y);
-    g.lineTo(bodyLeft + w + fenderBulge - 4 * s, crease1Y);
-    g.stroke({ width: 0.8 * s, color: 0x1e1e40, alpha: 0.7 });
-    g.moveTo(bodyLeft - fenderBulge + 6 * s, crease2Y);
-    g.lineTo(bodyLeft + w + fenderBulge - 6 * s, crease2Y);
-    g.stroke({ width: 0.6 * s, color: 0x1e1e40, alpha: 0.5 });
-
-    // Vertical panel lines (quarter panel seams)
-    const qtrInset = 30 * s;
-    g.moveTo(bodyLeft + qtrInset, bodyTop + 6 * s);
-    g.lineTo(bodyLeft + qtrInset - 3 * s, y - diffuserH - 2 * s);
-    g.stroke({ width: 0.5 * s, color: 0x1a1a38, alpha: 0.5 });
-    g.moveTo(bodyLeft + w - qtrInset, bodyTop + 6 * s);
-    g.lineTo(bodyLeft + w - qtrInset + 3 * s, y - diffuserH - 2 * s);
-    g.stroke({ width: 0.5 * s, color: 0x1a1a38, alpha: 0.5 });
-
-    // --- Rear wheel arches (larger, sportier) ---
-    const archR = 22 * s;
-    const archY = y - diffuserH;
-    g.arc(bodyLeft + 4 * s, archY, archR, -Math.PI, 0);
-    g.fill(0x050510);
-    g.arc(bodyLeft + w - 4 * s, archY, archR, -Math.PI, 0);
-    g.fill(0x050510);
-    // Wheel hint (dark circle inside arch)
-    const wheelR = 14 * s;
-    g.circle(bodyLeft + 4 * s, archY - 2 * s, wheelR);
-    g.fill(0x080818);
-    g.circle(bodyLeft + 4 * s, archY - 2 * s, wheelR);
-    g.stroke({ width: 1 * s, color: 0x222244, alpha: 0.5 });
-    g.circle(bodyLeft + w - 4 * s, archY - 2 * s, wheelR);
-    g.fill(0x080818);
-    g.circle(bodyLeft + w - 4 * s, archY - 2 * s, wheelR);
-    g.stroke({ width: 1 * s, color: 0x222244, alpha: 0.5 });
-
-    // --- Cabin (lower, aggressively sloped) ---
-    const cabInset = w * 0.13;
-    const cabTopInset = w * 0.22;
-    const cabinTop = bodyTop - cabinH;
-    g.poly([
-      bodyLeft + cabInset, bodyTop,
-      bodyLeft + w - cabInset, bodyTop,
+      bodyLeft + cabInset,        bodyTop,
+      bodyLeft + w - cabInset,    bodyTop,
       bodyLeft + w - cabTopInset, cabinTop,
-      bodyLeft + cabTopInset, cabinTop,
+      bodyLeft + cabTopInset,     cabinTop,
     ]);
-    g.fill(0x0c0c20);
+    g.fill(0x0b0d1c);
 
-    // C-pillars (thick, sporty)
-    const pillarW = 10 * s;
+    const pillarW = 18 * s;
     g.poly([
-      bodyLeft + cabInset, bodyTop,
-      bodyLeft + cabInset + pillarW, bodyTop,
-      bodyLeft + cabTopInset + pillarW * 0.6, cabinTop,
-      bodyLeft + cabTopInset, cabinTop,
+      bodyLeft + cabInset,                     bodyTop,
+      bodyLeft + cabInset + pillarW,           bodyTop,
+      bodyLeft + cabTopInset + pillarW * 0.35, cabinTop,
+      bodyLeft + cabTopInset,                  cabinTop,
     ]);
-    g.fill(0x0a0a1a);
+    g.fill(0x090a18);
     g.poly([
-      bodyLeft + w - cabInset - pillarW, bodyTop,
-      bodyLeft + w - cabInset, bodyTop,
-      bodyLeft + w - cabTopInset, cabinTop,
-      bodyLeft + w - cabTopInset - pillarW * 0.6, cabinTop,
+      bodyLeft + w - cabInset - pillarW,            bodyTop,
+      bodyLeft + w - cabInset,                      bodyTop,
+      bodyLeft + w - cabTopInset,                   cabinTop,
+      bodyLeft + w - cabTopInset - pillarW * 0.35,  cabinTop,
     ]);
-    g.fill(0x0a0a1a);
+    g.fill(0x090a18);
 
-    // Roof edge
+    // Roofline edge
     g.moveTo(bodyLeft + cabTopInset, cabinTop);
     g.lineTo(bodyLeft + w - cabTopInset, cabinTop);
-    g.stroke({ width: 1.5 * s, color: 0x222244, alpha: 0.7 });
+    g.stroke({ width: 1.5 * s, color: 0x253060, alpha: 0.65 });
 
-    // --- Rear windshield ---
-    const winPad = 12 * s;
-    const winBotInset = cabInset + winPad;
-    const winTopInset = cabTopInset + winPad;
-    const winTop = cabinTop + 8 * s;
-    const winBot = bodyTop - 4 * s;
-    g.poly([
-      bodyLeft + winBotInset, winBot,
-      bodyLeft + w - winBotInset, winBot,
-      bodyLeft + w - winTopInset, winTop,
-      bodyLeft + winTopInset, winTop,
-    ]);
-    g.fill({ color: palette.gridColor, alpha: 0.12 });
-
-    // Defroster lines
-    const defLines = 6;
-    for (let i = 1; i < defLines; i++) {
-      const t = i / defLines;
-      const ly = winTop + t * (winBot - winTop);
-      const lInset = winTopInset + t * (winBotInset - winTopInset);
-      g.moveTo(bodyLeft + lInset + 4 * s, ly);
-      g.lineTo(bodyLeft + w - lInset - 4 * s, ly);
-      g.stroke({ width: 0.4 * s, color: palette.gridColor, alpha: 0.10 });
+    // Small angular side mirrors
+    for (const side of [-1, 1]) {
+      const mx  = side === -1 ? bodyLeft + cabInset : bodyLeft + w - cabInset;
+      const mox = side * 13 * s;
+      const moy = -cabinH * 0.38;
+      g.poly([
+        mx,           bodyTop + moy,
+        mx + mox,     bodyTop + moy,
+        mx + mox * 1.1, bodyTop + moy - cabinH * 0.18,
+        mx + side * 2 * s, bodyTop + moy - cabinH * 0.18,
+      ]);
+      g.fill(0x0d1022);
+      g.stroke({ width: 0.5 * s, color: 0x202840, alpha: 0.6 });
     }
 
-    // Window frame
-    g.poly([
-      bodyLeft + winBotInset, winBot,
-      bodyLeft + w - winBotInset, winBot,
-      bodyLeft + w - winTopInset, winTop,
-      bodyLeft + winTopInset, winTop,
-    ]);
-    g.closePath();
-    g.stroke({ width: 0.8 * s, color: palette.gridColor, alpha: 0.25 });
+    // -----------------------------------------------------------------------
+    // Rear engine cover / windshield area — louvered slats behind roofline
+    // -----------------------------------------------------------------------
+    const winBotInset = cabInset + 12 * s;
+    const winTopInset = cabTopInset + 12 * s;
+    const winTop      = cabinTop + 5 * s;
+    const winBot      = bodyTop - 2 * s;
+    const rwH         = winBot - winTop;
+    const numRwSlats  = 6;
 
-    // --- Rear wing/spoiler ---
-    const wingW = w * 0.88;
-    const wingH = 5 * s;
-    const wingY = cabinTop - 18 * s;
-    const wingLeft = x - wingW / 2;
+    for (let i = 0; i < numRwSlats; i++) {
+      const t       = i / numRwSlats;
+      const tNext   = (i + 1) / numRwSlats;
+      const lInset  = winTopInset + t * (winBotInset - winTopInset);
+      const rInset  = lInset;
+      const sy      = winTop + t * rwH;
+      const syNext  = winTop + tNext * rwH;
+      const slatFace = (syNext - sy) * 0.55;
 
-    // Wing endplates (tall vertical fins)
-    const epW = 4 * s;
-    const epH = 22 * s;
-    g.poly([
-      wingLeft - epW, wingY - 2 * s,
-      wingLeft, wingY - 2 * s,
-      wingLeft + 2 * s, wingY + epH,
-      wingLeft - epW + 1 * s, wingY + epH,
-    ]);
-    g.fill(0x18183a);
-    g.poly([
-      wingLeft + wingW, wingY - 2 * s,
-      wingLeft + wingW + epW, wingY - 2 * s,
-      wingLeft + wingW + epW - 1 * s, wingY + epH,
-      wingLeft + wingW - 2 * s, wingY + epH,
-    ]);
-    g.fill(0x18183a);
-
-    // Wing pillars (swan-neck style from cabin top)
-    const pW = 4 * s;
-    const pillarInset = w * 0.20;
-    // Left pillar
-    g.poly([
-      bodyLeft + pillarInset, cabinTop,
-      bodyLeft + pillarInset + pW, cabinTop,
-      wingLeft + 14 * s + pW, wingY + wingH,
-      wingLeft + 14 * s, wingY + wingH,
-    ]);
-    g.fill(0x14142c);
-    // Right pillar
-    g.poly([
-      bodyLeft + w - pillarInset - pW, cabinTop,
-      bodyLeft + w - pillarInset, cabinTop,
-      wingLeft + wingW - 14 * s, wingY + wingH,
-      wingLeft + wingW - 14 * s - pW, wingY + wingH,
-    ]);
-    g.fill(0x14142c);
-
-    // Wing blade
-    g.rect(wingLeft, wingY, wingW, wingH);
-    g.fill(0x1a1a3e);
-    // Wing upper surface highlight
-    g.rect(wingLeft + 4 * s, wingY, wingW - 8 * s, 1.5 * s);
-    g.fill({ color: 0x333366, alpha: 0.5 });
-    // Wing outline
-    g.rect(wingLeft, wingY, wingW, wingH);
-    g.stroke({ width: 1 * s, color: palette.gridColor, alpha: 0.5 });
-    // Endplate outlines
-    g.poly([
-      wingLeft - epW, wingY - 2 * s,
-      wingLeft, wingY - 2 * s,
-      wingLeft + 2 * s, wingY + epH,
-      wingLeft - epW + 1 * s, wingY + epH,
-    ]);
-    g.closePath();
-    g.stroke({ width: 0.6 * s, color: palette.gridColor, alpha: 0.3 });
-    g.poly([
-      wingLeft + wingW, wingY - 2 * s,
-      wingLeft + wingW + epW, wingY - 2 * s,
-      wingLeft + wingW + epW - 1 * s, wingY + epH,
-      wingLeft + wingW - 2 * s, wingY + epH,
-    ]);
-    g.closePath();
-    g.stroke({ width: 0.6 * s, color: palette.gridColor, alpha: 0.3 });
-
-    // --- Four circular taillights (two per side) ---
-    const tailR = 9 * s;
-    const tailSmallR = 7 * s;
-    const tailY = bodyTop + 22 * s;
-    const tailGap = 28 * s;
-    const tailOuterInset = 18 * s;
-
-    // Left pair
-    this.drawCircleTaillight(g, bodyLeft + tailOuterInset, tailY, tailR, s, palette);
-    this.drawCircleTaillight(g, bodyLeft + tailOuterInset + tailGap, tailY, tailSmallR, s, palette);
-    // Right pair
-    this.drawCircleTaillight(g, bodyLeft + w - tailOuterInset, tailY, tailR, s, palette);
-    this.drawCircleTaillight(g, bodyLeft + w - tailOuterInset - tailGap, tailY, tailSmallR, s, palette);
-
-    // --- Taillight bar (connecting light strip between pairs on each side) ---
-    const barY = tailY - 2 * s;
-    const barH = 3 * s;
-    // Left bar
-    g.rect(bodyLeft + tailOuterInset + tailR, barY, tailGap - tailR - tailSmallR, barH);
-    g.fill({ color: 0xff2040, alpha: 0.15 });
-    // Right bar
-    g.rect(bodyLeft + w - tailOuterInset - tailGap + tailSmallR, barY, tailGap - tailR - tailSmallR, barH);
-    g.fill({ color: 0xff2040, alpha: 0.15 });
-
-    // --- Center section (between tail light clusters) ---
-    // Engine vent / mesh grille
-    const ventLeft = bodyLeft + tailOuterInset + tailGap + tailSmallR + 6 * s;
-    const ventRight = bodyLeft + w - tailOuterInset - tailGap - tailSmallR - 6 * s;
-    const ventW = ventRight - ventLeft;
-    const ventY = bodyTop + 12 * s;
-    const ventH = 24 * s;
-    if (ventW > 10 * s) {
-      g.rect(ventLeft, ventY, ventW, ventH);
-      g.fill(0x0a0a1c);
-      // Mesh lines
-      const meshLines = Math.floor(ventW / (6 * s));
-      for (let i = 0; i <= meshLines; i++) {
-        const mx = ventLeft + (i / meshLines) * ventW;
-        g.moveTo(mx, ventY + 2 * s);
-        g.lineTo(mx, ventY + ventH - 2 * s);
-        g.stroke({ width: 0.5 * s, color: 0x1a1a38, alpha: 0.6 });
-      }
-      g.rect(ventLeft, ventY, ventW, ventH);
-      g.stroke({ width: 0.6 * s, color: 0x222244, alpha: 0.4 });
+      g.poly([
+        bodyLeft + lInset + 2 * s, sy,
+        bodyLeft + w - rInset - 2 * s, sy,
+        bodyLeft + w - rInset - 2 * s, sy + slatFace,
+        bodyLeft + lInset + 2 * s, sy + slatFace,
+      ]);
+      g.fill(0x0a0c1c);
+      g.moveTo(bodyLeft + lInset + 2 * s, sy);
+      g.lineTo(bodyLeft + w - rInset - 2 * s, sy);
+      g.stroke({ width: 0.5 * s, color: 0x1e2840, alpha: 0.5 });
     }
 
-    // --- Exhaust tips (quad, larger) ---
-    const exhR = 5 * s;
-    const exhY = y - 5 * s;
-    const exhSpacing = 14 * s;
-    for (const ox of [-exhSpacing - exhR, -exhR * 0.5, exhR * 0.5, exhSpacing + exhR]) {
-      g.circle(x + ox, exhY, exhR);
-      g.fill(0x1a1a38);
-      g.circle(x + ox, exhY, exhR - 1.5 * s);
-      g.fill(0x0e0e20);
-      g.circle(x + ox, exhY, exhR);
-      g.stroke({ width: 0.8 * s, color: 0x444466, alpha: 0.7 });
-    }
-
-    // --- License plate ---
-    const plateW = 42 * s;
-    const plateH = 12 * s;
+    // -----------------------------------------------------------------------
+    // License plate
+    // -----------------------------------------------------------------------
+    const plateW = 38 * s;
+    const plateH = 11 * s;
     const plateX = x - plateW / 2;
-    const plateY = y - diffuserH - plateH - 3 * s;
+    const plateY = diffTop - plateH - 2 * s;
     g.rect(plateX, plateY, plateW, plateH);
-    g.fill(0xd0d0c0);
-    g.moveTo(plateX + 7 * s, plateY + plateH * 0.55);
-    g.lineTo(plateX + plateW - 7 * s, plateY + plateH * 0.55);
-    g.stroke({ width: 1.5 * s, color: 0x333333, alpha: 0.5 });
+    g.fill(0xc8c8b8);
+    g.moveTo(plateX + 5 * s, plateY + plateH * 0.55);
+    g.lineTo(plateX + plateW - 5 * s, plateY + plateH * 0.55);
+    g.stroke({ width: 1.2 * s, color: 0x333333, alpha: 0.5 });
     g.rect(plateX, plateY, plateW, plateH);
-    g.stroke({ width: 0.8 * s, color: 0x555555, alpha: 0.8 });
-    // Plate light
-    g.rect(plateX + plateW * 0.3, plateY - 2.5 * s, plateW * 0.4, 2.5 * s);
-    g.fill({ color: 0xffffee, alpha: 0.2 });
+    g.stroke({ width: 0.7 * s, color: 0x555555, alpha: 0.8 });
 
-    // --- Trunk badge ---
-    const badgeR = 6 * s;
-    const badgeY = bodyTop + (bodyH - diffuserH) * 0.55;
-    g.circle(x, badgeY, badgeR);
-    g.fill({ color: 0x888899, alpha: 0.2 });
-    g.circle(x, badgeY, badgeR);
-    g.stroke({ width: 0.8 * s, color: 0x666688, alpha: 0.35 });
-    // Inner badge ring
-    g.circle(x, badgeY, badgeR * 0.55);
-    g.stroke({ width: 0.5 * s, color: 0x666688, alpha: 0.25 });
-
-    // --- Neon outlines (pulsing) ---
-    // Body outline
-    g.poly([
-      bodyLeft - fenderBulge, y - diffuserH,
-      bodyLeft - fenderBulge, bodyTop + bodyH * 0.5,
-      bodyLeft - fenderBulge * 0.3, bodyTop + bodyH * 0.2,
-      bodyLeft, bodyTop,
-      bodyLeft + w, bodyTop,
-      bodyLeft + w + fenderBulge * 0.3, bodyTop + bodyH * 0.2,
-      bodyLeft + w + fenderBulge, bodyTop + bodyH * 0.5,
-      bodyLeft + w + fenderBulge, y - diffuserH,
-    ]);
+    // -----------------------------------------------------------------------
+    // Neon outlines (pulsing)
+    // -----------------------------------------------------------------------
+    g.moveTo(bodyLeft, diffTop);
+    g.lineTo(bodyLeft, bodyTop + cr);
+    g.arcTo(bodyLeft, bodyTop, bodyLeft + cr, bodyTop, cr);
+    g.lineTo(bodyLeft + w - cr, bodyTop);
+    g.arcTo(bodyLeft + w, bodyTop, bodyLeft + w, bodyTop + cr, cr);
+    g.lineTo(bodyLeft + w, diffTop);
     g.closePath();
-    g.stroke({ width: 1.2 * s, color: palette.gridColor, alpha: pulseAlpha });
+    g.stroke({ width: 1.0 * s, color: palette.gridColor, alpha: pulseAlpha * 0.55 });
 
-    // Cabin outline
     g.poly([
-      bodyLeft + cabInset, bodyTop,
-      bodyLeft + w - cabInset, bodyTop,
+      bodyLeft + cabInset,        bodyTop,
+      bodyLeft + w - cabInset,    bodyTop,
       bodyLeft + w - cabTopInset, cabinTop,
-      bodyLeft + cabTopInset, cabinTop,
+      bodyLeft + cabTopInset,     cabinTop,
     ]);
     g.closePath();
-    g.stroke({ width: 0.8 * s, color: palette.gridColor, alpha: pulseAlpha * 0.5 });
+    g.stroke({ width: 0.8 * s, color: palette.gridColor, alpha: pulseAlpha * 0.4 });
   }
 
   // ---------------------------------------------------------------------------

@@ -1,6 +1,8 @@
 // PixiJS renderer for the synthwave sunset scene
 import { Application, Graphics, Container } from 'pixi.js';
 import { Random } from '$lib/map/random';
+import { GridRoadRenderer, RealisticRoadRenderer } from './road';
+import type { RoadRenderer, RoadRenderContext } from './road';
 
 export interface SunsetConfig {
   seed: number;
@@ -19,6 +21,7 @@ export interface SunsetConfig {
   showTrees: boolean;
   palette: 'auto' | 'ember' | 'dusk' | 'amber' | 'neon' | 'terra';
   cloudStyle: 'auto' | 'puff' | 'wispy';
+  roadStyle: 'grid' | 'road';
 }
 
 // -----------------------------------------------------------------------
@@ -179,6 +182,7 @@ const DEFAULT_CONFIG: SunsetConfig = {
   showTrees:     true,
   palette:       'auto',
   cloudStyle:    'auto',
+  roadStyle:     'grid',
 };
 
 // -----------------------------------------------------------------------
@@ -200,6 +204,7 @@ export class SunsetRenderer {
   private trees: Tree[] = [];
 
   protected animationTime = 0;
+  private roadRenderer: RoadRenderer = new GridRoadRenderer();
 
   constructor() {
     this.app = new Application();
@@ -231,6 +236,12 @@ export class SunsetRenderer {
   setConfig(partial: Partial<SunsetConfig>): void {
     const prev = this.config;
     this.config = { ...this.config, ...partial };
+
+    if (prev.roadStyle !== this.config.roadStyle) {
+      this.roadRenderer = this.config.roadStyle === 'road'
+        ? new RealisticRoadRenderer()
+        : new GridRoadRenderer();
+    }
 
     const needsRegen =
       prev.seed          !== this.config.seed          ||
@@ -476,7 +487,7 @@ export class SunsetRenderer {
     this.drawGround(horizonY);
     this.drawHorizonGlow(horizonY, palette);
     if (this.config.showTrees)     this.drawTrees();
-    if (this.config.showGrid)      this.drawGrid(horizonY, palette);
+    if (this.config.showGrid)      this.drawRoad(horizonY, palette);
   }
 
   private drawSky(horizonY: number, palette: PaletteConfig): void {
@@ -843,38 +854,22 @@ export class SunsetRenderer {
     this.container.addChild(g);
   }
 
-  private drawGrid(horizonY: number, palette: PaletteConfig): void {
-    const g          = new Graphics();
-    g.label          = 'grid';
-    const groundH    = this.height - horizonY;
-    const cx         = this.width / 2;
-    const spread     = this.width * 1.5;
-    const numVLines  = 30;
-
-    for (let i = -numVLines / 2; i <= numVLines / 2; i++) {
-      const bottomX = cx + (i / (numVLines / 2)) * (spread / 2);
-      g.moveTo(cx, horizonY);
-      g.lineTo(bottomX, this.height);
-      g.stroke({ width: 1, color: palette.gridColor, alpha: 0.6 });
-    }
-
-    const numHLines    = 20;
-    const scrollOffset = (this.animationTime * this.config.gridSpeed * 0.3) % 1.0;
-
-    for (let i = 0; i < numHLines; i++) {
-      const rawT = (i + scrollOffset) / numHLines;
-      const t    = rawT * rawT;
-      const y    = horizonY + t * groundH;
-      if (y <= horizonY || y >= this.height) continue;
-
-      const perspT    = (y - horizonY) / groundH;
-      const halfWidth = perspT * (spread / 2);
-      g.moveTo(cx - halfWidth, y);
-      g.lineTo(cx + halfWidth, y);
-      g.stroke({ width: 0.5 + t * 1.5, color: palette.gridColor, alpha: 0.3 + t * 0.4 });
-    }
-
+  private drawRoad(horizonY: number, palette: PaletteConfig): void {
+    const g = new Graphics();
+    g.label = 'road';
+    this.roadRenderer.render(g, this.buildRoadCtx(horizonY, palette));
     this.container.addChild(g);
+  }
+
+  private buildRoadCtx(horizonY: number, palette: PaletteConfig): RoadRenderContext {
+    return {
+      horizonY,
+      width:         this.width,
+      height:        this.height,
+      palette,
+      animationTime: this.animationTime,
+      speed:         this.config.gridSpeed,
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -887,7 +882,7 @@ export class SunsetRenderer {
     this.updateSunGlow();
     this.updateClouds();
     this.updateHorizonGlow();
-    this.updateGrid();
+    this.updateRoad();
   }
 
   private updateStars(): void {
@@ -937,38 +932,13 @@ export class SunsetRenderer {
     g.fill({ color: palette.horizonCore, alpha: coreAlpha });
   }
 
-  private updateGrid(): void {
+  private updateRoad(): void {
     if (!this.config.showGrid) return;
-    const g = this.findByLabel('grid');
+    const g = this.findByLabel('road');
     if (!g) return;
     const horizonY = this.height * 0.55;
-    const groundH  = this.height - horizonY;
-    const cx       = this.width / 2;
-    const spread   = this.width * 1.5;
-    const palette  = this.getActivePalette();
     g.clear();
-
-    const numVLines = 30;
-    for (let i = -numVLines / 2; i <= numVLines / 2; i++) {
-      const bottomX = cx + (i / (numVLines / 2)) * (spread / 2);
-      g.moveTo(cx, horizonY);
-      g.lineTo(bottomX, this.height);
-      g.stroke({ width: 1, color: palette.gridColor, alpha: 0.6 });
-    }
-
-    const numHLines    = 20;
-    const scrollOffset = (this.animationTime * this.config.gridSpeed * 0.3) % 1.0;
-    for (let i = 0; i < numHLines; i++) {
-      const rawT = (i + scrollOffset) / numHLines;
-      const t    = rawT * rawT;
-      const y    = horizonY + t * groundH;
-      if (y <= horizonY || y >= this.height) continue;
-      const perspT    = (y - horizonY) / groundH;
-      const halfWidth = perspT * (spread / 2);
-      g.moveTo(cx - halfWidth, y);
-      g.lineTo(cx + halfWidth, y);
-      g.stroke({ width: 0.5 + t * 1.5, color: palette.gridColor, alpha: 0.3 + t * 0.4 });
-    }
+    this.roadRenderer.render(g, this.buildRoadCtx(horizonY, this.getActivePalette()));
   }
 
   protected findByLabel(label: string): Graphics | null {

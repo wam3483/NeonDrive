@@ -15,6 +15,7 @@
   let mountainHeight = $state(0.25);
   let mountainLayers = $state(3);
   let cloudDensity  = $state(0.6);
+  let roadStyle     = $state<'grid' | 'road'>('road');
   let showGrid      = $state(true);
   let showStars     = $state(true);
   let showMountains = $state(true);
@@ -41,7 +42,7 @@
       mountainHeight, mountainLayers,
       cloudDensity,
       showGrid, showStars, showMountains, showClouds, showTrees,
-      palette, cloudStyle,
+      palette, cloudStyle, roadStyle,
     });
   }
 
@@ -144,10 +145,21 @@
       </label>
     </div>
 
-    <!-- Grid speed -->
+    <!-- Road -->
     <div class="control-group">
       <label>
-        Grid Speed
+        Road
+        <select bind:value={roadStyle} onchange={updateConfig}>
+          <option value="grid">Grid</option>
+          <option value="road">Road</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Road/Grid speed -->
+    <div class="control-group">
+      <label>
+        Road Speed
         <input type="range" min="0" max="5" step="0.1" bind:value={gridSpeed} onchange={updateConfig} />
         <span>{gridSpeed.toFixed(1)}</span>
       </label>

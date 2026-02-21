@@ -22,6 +22,7 @@
       showTrees: true,
       sunStripes: true,
       starDensity: 300,
+      roadStyle: 'road',
     });
     r.setCarStyle('sport');
     renderer = r;
