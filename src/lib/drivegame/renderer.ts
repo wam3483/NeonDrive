@@ -358,11 +358,21 @@ export class DriveGameRenderer extends SunsetRenderer {
       // Tread face
       g.rect(tx, tireTop, tireW, tireH);
       g.fill(0x0b0b14);
-      // Subtle tread highlight along top edge
+      // Scrolling vertical motion bars
+      const numBars  = 7;
+      const barW     = tireW / (numBars * 2);
+      const scroll   = (this.animationTime * 2.5) % (tireW / numBars);
+      for (let i = 0; i < numBars + 1; i++) {
+        const bx = tx + (i * tireW / numBars) + scroll;
+        if (bx < tx || bx + barW > tx + tireW) continue;
+        g.rect(bx, tireTop + 1 * s, barW, tireH - 2 * s);
+        g.fill({ color: 0x1a1a28, alpha: 0.7 });
+      }
+      // Top edge highlight
       g.moveTo(tx + 2 * s, tireTop + 1.5 * s);
       g.lineTo(tx + tireW - 2 * s, tireTop + 1.5 * s);
       g.stroke({ width: 1 * s, color: 0x1c1c28, alpha: 0.8 });
-      // Outer tyre sidewall edge lines
+      // Border
       g.rect(tx, tireTop, tireW, tireH);
       g.stroke({ width: 1 * s, color: 0x181820, alpha: 0.6 });
     }
