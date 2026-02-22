@@ -76,8 +76,8 @@ export type Biome =
   | 'SUBTROPICAL_DESERT';
 
 export const BIOME_COLORS: Record<Biome, number> = {
-  OCEAN: 0x1a1850,
-  LAKE: 0x1e2470,
+  OCEAN: 0x080818,
+  LAKE: 0x0a0c28,
   BEACH: 0xe0d8c8,                  // warm cream coastline
   ICE: 0xd8d8f0,                    // pale icy lavender
   MARSH: 0x304838,                  // dark blue-green

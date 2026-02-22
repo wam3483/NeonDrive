@@ -58,19 +58,19 @@ const TOWN_COLORS = {
 
 // Deep indigo-purple ocean palette (synthwave map style)
 const OCEAN_COLORS = {
-  dark: 0x1a1850,      // Deep indigo-navy
-  mid: 0x242888,       // Medium blue-purple
-  light: 0x303aa0,     // Lighter blue-purple
-  highlight: 0x3c48b8, // Wave crest highlight
+  dark: 0x080818,      // Near-black deep water
+  mid: 0x0e1038,       // Dark navy-purple
+  light: 0x161a58,     // Slightly lighter deep blue
+  highlight: 0x1e2470, // Wave crest (still very dark)
   foam: 0xffffff,      // White cap
-  foamLight: 0xe8e4ff, // Purple-tinted foam
+  foamLight: 0xd0ccff, // Purple-tinted foam
 };
 
 const LAKE_COLORS = {
-  dark: 0x1e2470,
-  mid: 0x283090,
-  light: 0x3038a8,
-  highlight: 0x3c44c0,
+  dark: 0x0a0c28,
+  mid: 0x101440,
+  light: 0x181c58,
+  highlight: 0x202470,
   foam: 0xffffff,
   foamLight: 0xd8d4ff,
 };
@@ -127,6 +127,7 @@ export class MapRenderer {
   private foamGraphics: Graphics | null = null;
   private shoreGraphics: Graphics | null = null;
   private landGraphics: Graphics | null = null;
+  private coastOutlineGraphics: Graphics | null = null;
   private townGraphics: Graphics | null = null;
   private roadGraphics: Graphics | null = null;
   private cloudGraphics: Graphics | null = null;
@@ -161,7 +162,7 @@ export class MapRenderer {
       canvas,
       width,
       height,
-      backgroundColor: 0x1a1850,
+      backgroundColor: 0x080818,
       antialias: true,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
@@ -300,6 +301,11 @@ export class MapRenderer {
       this.drawOceanGrid(this.gridGraphics, this.animationTime);
     }
 
+    // Coastline outline pulses continuously
+    if (this.coastOutlineGraphics) {
+      this.drawCoastlineOutline(this.coastOutlineGraphics, this.animationTime);
+    }
+
     // Clouds animate smoothly (not stepped) for dreamlike drift
     if (this.cloudGraphics && this.clouds.length > 0) {
       this.drawClouds(this.cloudGraphics, this.animationTime);
@@ -411,6 +417,7 @@ export class MapRenderer {
     this.foamGraphics = null;
     this.shoreGraphics = null;
     this.landGraphics = null;
+    this.coastOutlineGraphics = null;
     this.townGraphics = null;
     this.roadGraphics = null;
     this.cloudGraphics = null;
@@ -438,6 +445,11 @@ export class MapRenderer {
       this.landGraphics = new Graphics();
       this.drawLandPolygons(this.landGraphics);
       this.mapContainer.addChild(this.landGraphics);
+
+      // Teal pulsing outline along every ocean↔land edge
+      this.coastOutlineGraphics = new Graphics();
+      this.drawCoastlineOutline(this.coastOutlineGraphics, this.animationTime);
+      this.mapContainer.addChild(this.coastOutlineGraphics);
 
       // Shoreline foam (animated, on top of land)
       this.shoreGraphics = new Graphics();
@@ -739,6 +751,35 @@ export class MapRenderer {
     graphics.fill(0xffffff);
   }
 
+  private drawCoastlineOutline(graphics: Graphics, time: number): void {
+    if (!this.mapData) return;
+
+    graphics.clear();
+
+    // Pulse: slow sine wave between dim and bright
+    const pulse = 0.5 + 0.5 * Math.sin(time * 0.5);
+
+    const glowAlpha = 0.12 + 0.10 * pulse;  // outer bloom: 0.12 → 0.22
+    const coreAlpha = 0.45 + 0.40 * pulse;  // bright core: 0.45 → 0.85
+    const coreWidth = 1.0 + 0.5 * pulse;    // core width: 1.0 → 1.5
+
+    for (const edge of this.coastlineEdges) {
+      if (!edge.v0 || !edge.v1) continue;
+      const x0 = edge.v0.point.x, y0 = edge.v0.point.y;
+      const x1 = edge.v1.point.x, y1 = edge.v1.point.y;
+
+      // Outer soft bloom
+      graphics.moveTo(x0, y0);
+      graphics.lineTo(x1, y1);
+      graphics.stroke({ width: 5, color: 0x40e8d8, alpha: glowAlpha, cap: 'round' });
+
+      // Bright teal core
+      graphics.moveTo(x0, y0);
+      graphics.lineTo(x1, y1);
+      graphics.stroke({ width: coreWidth, color: 0x88ffee, alpha: coreAlpha, cap: 'round' });
+    }
+  }
+
   private drawShorelineAnimated(graphics: Graphics, time: number): void {
     if (!this.mapData || this.coastlineEdges.length === 0) return;
     if (this.options.showElevation || this.options.showMoisture) return;
@@ -929,8 +970,8 @@ export class MapRenderer {
     const numV = Math.floor(width  / cellSize) + 1; // vertical lines (top→bottom)
 
     // --- Pass 1: base grid lines ---
-    for (let i = 0; i < numH; i++) traceLine(true,  i * cellSize, 1, 0xcc44cc, 0.45);
-    for (let i = 0; i < numV; i++) traceLine(false, i * cellSize, 1, 0xcc44cc, 0.45);
+    for (let i = 0; i < numH; i++) traceLine(true,  i * cellSize, 1, 0xcc44cc, 0.22);
+    for (let i = 0; i < numV; i++) traceLine(false, i * cellSize, 1, 0xcc44cc, 0.22);
 
     // --- Pass 2: sweeping glow, one grid line at a time ---
     // hGlow: sweeps through horizontal lines top → bottom (one line at a time)
@@ -947,18 +988,18 @@ export class MapRenderer {
       const s = glowStrength(i, hGlowIdx);
       if (s < 0.02) continue;
       const y = i * cellSize;
-      traceLine(true, y, 6,   0xdd66dd, 0.08 * s);
-      traceLine(true, y, 2.5, 0xee88ee, 0.30 * s);
-      traceLine(true, y, 1,   0xffffff, 0.55 * s);
+      traceLine(true, y, 6,   0xdd66dd, 0.04 * s);
+      traceLine(true, y, 2.5, 0xee88ee, 0.15 * s);
+      traceLine(true, y, 1,   0xffffff, 0.28 * s);
     }
 
     for (let i = 0; i < numV; i++) {
       const s = glowStrength(i, vGlowIdx);
       if (s < 0.02) continue;
       const x = i * cellSize;
-      traceLine(false, x, 6,   0xdd66dd, 0.08 * s);
-      traceLine(false, x, 2.5, 0xee88ee, 0.30 * s);
-      traceLine(false, x, 1,   0xffffff, 0.55 * s);
+      traceLine(false, x, 6,   0xdd66dd, 0.04 * s);
+      traceLine(false, x, 2.5, 0xee88ee, 0.15 * s);
+      traceLine(false, x, 1,   0xffffff, 0.28 * s);
     }
   }
 
