@@ -56,23 +56,23 @@ const TOWN_COLORS = {
   inland: { fill: 0x8b5a2b, stroke: 0x4a2f17 },      // Brown - inland towns
 };
 
-// Retro SMB3-style ocean color palette
+// Deep indigo-purple ocean palette (synthwave map style)
 const OCEAN_COLORS = {
-  dark: 0x1a3a5c,      // Deep water
-  mid: 0x2858a0,       // Medium water
-  light: 0x4080c0,     // Light wave
-  highlight: 0x60a0d8, // Wave crest
+  dark: 0x1a1850,      // Deep indigo-navy
+  mid: 0x242888,       // Medium blue-purple
+  light: 0x303aa0,     // Lighter blue-purple
+  highlight: 0x3c48b8, // Wave crest highlight
   foam: 0xffffff,      // White cap
-  foamLight: 0xe8f4ff, // Lighter foam
+  foamLight: 0xe8e4ff, // Purple-tinted foam
 };
 
 const LAKE_COLORS = {
-  dark: 0x205080,
-  mid: 0x3068a0,
-  light: 0x4888c0,
-  highlight: 0x58a0d0,
+  dark: 0x1e2470,
+  mid: 0x283090,
+  light: 0x3038a8,
+  highlight: 0x3c44c0,
   foam: 0xffffff,
-  foamLight: 0xe0f0ff,
+  foamLight: 0xd8d4ff,
 };
 
 // Shore foam colors
@@ -122,6 +122,7 @@ export class MapRenderer {
 
   // Animation state
   private oceanGraphics: Graphics | null = null;
+  private gridGraphics: Graphics | null = null;
   private lakeGraphics: Graphics | null = null;
   private foamGraphics: Graphics | null = null;
   private shoreGraphics: Graphics | null = null;
@@ -160,7 +161,7 @@ export class MapRenderer {
       canvas,
       width,
       height,
-      backgroundColor: 0x1a3a5c,
+      backgroundColor: 0x1a1850,
       antialias: true,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
@@ -294,6 +295,11 @@ export class MapRenderer {
       this.drawShorelineAnimated(this.shoreGraphics!, this.animationTime);
     }
 
+    // Grid ripples continuously (smooth, not stepped like ocean frames)
+    if (this.gridGraphics) {
+      this.drawOceanGrid(this.gridGraphics, this.animationTime);
+    }
+
     // Clouds animate smoothly (not stepped) for dreamlike drift
     if (this.cloudGraphics && this.clouds.length > 0) {
       this.drawClouds(this.cloudGraphics, this.animationTime);
@@ -400,6 +406,7 @@ export class MapRenderer {
 
     this.mapContainer.removeChildren();
     this.oceanGraphics = null;
+    this.gridGraphics = null;
     this.lakeGraphics = null;
     this.foamGraphics = null;
     this.shoreGraphics = null;
@@ -417,7 +424,12 @@ export class MapRenderer {
       this.mapContainer.addChild(this.oceanGraphics);
       this.mapContainer.addChild(this.foamGraphics);
 
-      // Lake layer (static - no wave animation)
+      // Ocean grid overlay (sits over ocean waves, under all land tiles)
+      this.gridGraphics = new Graphics();
+      this.drawOceanGrid(this.gridGraphics, this.animationTime);
+      this.mapContainer.addChild(this.gridGraphics);
+
+      // Lake layer (static - no wave animation, covers grid)
       this.lakeGraphics = new Graphics();
       this.drawLakePolygons(this.lakeGraphics);
       this.mapContainer.addChild(this.lakeGraphics);
@@ -871,6 +883,82 @@ export class MapRenderer {
           cap: 'round'
         });
       }
+    }
+  }
+
+  private drawOceanGrid(graphics: Graphics, time: number): void {
+    if (!this.mapData) return;
+
+    graphics.clear();
+
+    const { width, height } = this.mapData.config;
+    const cellSize = 50;
+    const amplitude = 5;
+    const sampleStep = 8;
+
+    const wave = (x: number, y: number) => {
+      const w1 = Math.sin(x * 0.025 - time * 0.15);
+      const w2 = Math.sin((x + y * 0.5) * 0.018 - time * 0.105);
+      const w3 = Math.sin(y * 0.02 - time * 0.08);
+      return w1 * 0.5 + w2 * 0.3 + w3 * 0.2;
+    };
+
+    // Trace a single rippled grid line and stroke it with the given style.
+    const traceLine = (
+      horizontal: boolean, pos: number,
+      strokeWidth: number, color: number, alpha: number
+    ) => {
+      let first = true;
+      if (horizontal) {
+        for (let x = 0; x <= width; x += sampleStep) {
+          const p = pos + wave(x, pos) * amplitude;
+          if (first) { graphics.moveTo(x, p); first = false; }
+          else        { graphics.lineTo(x, p); }
+        }
+      } else {
+        for (let y = 0; y <= height; y += sampleStep) {
+          const p = pos + wave(pos, y) * amplitude;
+          if (first) { graphics.moveTo(p, y); first = false; }
+          else        { graphics.lineTo(p, y); }
+        }
+      }
+      graphics.stroke({ width: strokeWidth, color, alpha, cap: 'round', join: 'round' });
+    };
+
+    const numH = Math.floor(height / cellSize) + 1; // horizontal lines (left→right)
+    const numV = Math.floor(width  / cellSize) + 1; // vertical lines (top→bottom)
+
+    // --- Pass 1: base grid lines ---
+    for (let i = 0; i < numH; i++) traceLine(true,  i * cellSize, 1, 0xcc44cc, 0.45);
+    for (let i = 0; i < numV; i++) traceLine(false, i * cellSize, 1, 0xcc44cc, 0.45);
+
+    // --- Pass 2: sweeping glow, one grid line at a time ---
+    // hGlow: sweeps through horizontal lines top → bottom (one line at a time)
+    // vGlow: sweeps through vertical lines left → right (one line at a time)
+    // Different speeds so they're never in sync.
+    const hGlowIdx = (time * 0.12) % numH;
+    const vGlowIdx = (time * 0.10) % numV;
+
+    const falloff = 0.65; // how tightly the glow hugs the active line
+    const glowStrength = (i: number, scan: number) =>
+      Math.max(0, 1 - Math.abs(i - scan) / falloff);
+
+    for (let i = 0; i < numH; i++) {
+      const s = glowStrength(i, hGlowIdx);
+      if (s < 0.02) continue;
+      const y = i * cellSize;
+      traceLine(true, y, 6,   0xdd66dd, 0.08 * s);
+      traceLine(true, y, 2.5, 0xee88ee, 0.30 * s);
+      traceLine(true, y, 1,   0xffffff, 0.55 * s);
+    }
+
+    for (let i = 0; i < numV; i++) {
+      const s = glowStrength(i, vGlowIdx);
+      if (s < 0.02) continue;
+      const x = i * cellSize;
+      traceLine(false, x, 6,   0xdd66dd, 0.08 * s);
+      traceLine(false, x, 2.5, 0xee88ee, 0.30 * s);
+      traceLine(false, x, 1,   0xffffff, 0.55 * s);
     }
   }
 

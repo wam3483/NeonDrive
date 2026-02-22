@@ -76,24 +76,24 @@ export type Biome =
   | 'SUBTROPICAL_DESERT';
 
 export const BIOME_COLORS: Record<Biome, number> = {
-  OCEAN: 0x44447a,
-  LAKE: 0x336699,
-  BEACH: 0xa09077,
-  ICE: 0x99ffff,
-  MARSH: 0x2f6666,
-  SNOW: 0xffffff,
-  TUNDRA: 0xbbbbaa,
-  BARE: 0x888888,
-  SCORCHED: 0x555555,
-  TAIGA: 0x99aa77,
-  SHRUBLAND: 0x889977,
-  TEMPERATE_DESERT: 0xc9d29b,
-  TEMPERATE_RAIN_FOREST: 0x448855,
-  TEMPERATE_DECIDUOUS_FOREST: 0x679459,
-  GRASSLAND: 0x88aa55,
-  TROPICAL_RAIN_FOREST: 0x337755,
-  TROPICAL_SEASONAL_FOREST: 0x559944,
-  SUBTROPICAL_DESERT: 0xd2b98b,
+  OCEAN: 0x1a1850,
+  LAKE: 0x1e2470,
+  BEACH: 0xe0d8c8,                  // warm cream coastline
+  ICE: 0xd8d8f0,                    // pale icy lavender
+  MARSH: 0x304838,                  // dark blue-green
+  SNOW: 0xf0eef8,                   // near-white with purple tint
+  TUNDRA: 0x6030b0,                 // vibrant purple mid-mountain
+  BARE: 0x2a1050,                   // deep purple upper-mountain
+  SCORCHED: 0x100618,               // near-black purple peaks
+  TAIGA: 0x485828,                  // dark olive
+  SHRUBLAND: 0x7a7850,              // tan-olive
+  TEMPERATE_DESERT: 0xa89a60,       // warm tan
+  TEMPERATE_RAIN_FOREST: 0x486030,  // dark olive-green
+  TEMPERATE_DECIDUOUS_FOREST: 0x5a7030, // medium olive-green
+  GRASSLAND: 0x7a8838,              // muted olive green
+  TROPICAL_RAIN_FOREST: 0x3a5028,   // deep dark green
+  TROPICAL_SEASONAL_FOREST: 0x507038, // medium dark green
+  SUBTROPICAL_DESERT: 0xa89860,     // sandy tan
 };
 
 export interface MapConfig {
