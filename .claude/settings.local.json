@@ -5,7 +5,9 @@
       "Bash(npx tsc:*)",
       "Bash(npx vite build)",
       "Bash(python:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(grep:*)",
+      "Bash(tail:*)"
     ]
   }
 }

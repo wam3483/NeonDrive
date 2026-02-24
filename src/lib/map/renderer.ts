@@ -5,6 +5,7 @@ import type { Town } from './towns';
 import type { Road } from './roads';
 import { buildNoisyEdges, buildNoisyPolygon } from './noisyEdges';
 import { BIOME_COLORS } from './types';
+import { type GlitchAnimation, ScrollingTextGlitch } from './glitch';
 
 // Text styles for town names
 const TOWN_TEXT_SMALL = new TextStyle({
@@ -140,6 +141,11 @@ export class MapRenderer {
   private noisyPolygons: Map<number, number[]> = new Map();
   private animationTime: number = 0;
   private animationFrame: number = 0;
+
+  // Glitch animation state
+  private glitchContainer: Container | null = null;
+  private glitchAnimations: GlitchAnimation[] = [];
+  private purpleCenters: Center[] = [];  // TUNDRA / BARE / SCORCHED biomes
 
   // Bound event handlers (for cleanup)
   private boundWheel: ((e: WheelEvent) => void) | null = null;
@@ -282,6 +288,11 @@ export class MapRenderer {
   }
 
   private animate(ticker: { deltaTime: number }): void {
+    // Always tick glitch animations regardless of other render state
+    for (const glitch of this.glitchAnimations) {
+      glitch.update(ticker.deltaTime);
+    }
+
     if (!this.mapData || !this.oceanGraphics || !this.options.showPolygons) return;
     if (this.options.showElevation || this.options.showMoisture) return;
 
@@ -326,6 +337,14 @@ export class MapRenderer {
     for (const center of mapData.centers) {
       this.noisyPolygons.set(center.index, buildNoisyPolygon(center, noisyEdges));
     }
+    // Cache high-elevation purple centers for glitch placement
+    this.purpleCenters = mapData.centers.filter(
+      (c) => !c.water && !c.ocean &&
+        (c.biome === 'TUNDRA' || c.biome === 'BARE' || c.biome === 'SCORCHED')
+    );
+    // Sort by y so sampling distributes evenly across the purple zone
+    this.purpleCenters.sort((a, b) => a.point.y - b.point.y);
+
     // Generate very infrequent clouds
     this.generateClouds(mapData.config.seed);
     this.render();
@@ -410,6 +429,13 @@ export class MapRenderer {
   render(): void {
     if (!this.mapData || !this.initialized) return;
 
+    // Destroy glitch text objects before clearing the container
+    for (const glitch of this.glitchAnimations) {
+      glitch.destroy();
+    }
+    this.glitchAnimations = [];
+    this.glitchContainer = null;
+
     this.mapContainer.removeChildren();
     this.oceanGraphics = null;
     this.gridGraphics = null;
@@ -445,6 +471,13 @@ export class MapRenderer {
       this.landGraphics = new Graphics();
       this.drawLandPolygons(this.landGraphics);
       this.mapContainer.addChild(this.landGraphics);
+
+      // Glitch animations on top of purple (high-elevation) terrain
+      if (this.purpleCenters.length > 0) {
+        this.glitchContainer = new Container();
+        this.buildGlitchAnimations(this.glitchContainer);
+        this.mapContainer.addChild(this.glitchContainer);
+      }
 
       // Teal pulsing outline along every ocean↔land edge
       this.coastOutlineGraphics = new Graphics();
@@ -1446,6 +1479,56 @@ export class MapRenderer {
     }
   }
 
+  private buildGlitchAnimations(container: Container): void {
+    if (!this.mapData) return;
+
+    const rng = this.mulberry32(this.mapData.config.seed + 77777);
+
+    // Merge purple centers into horizontal y-bands so each glitch row spans
+    // the full combined x-extent of all purple polygons at that elevation,
+    // rather than a single small polygon's bounding box.
+    const BAND_HEIGHT = 15; // px — roughly one Voronoi cell row tall
+    const bandMap = new Map<number, { minX: number; maxX: number; sumY: number; count: number }>();
+
+    for (const center of this.purpleCenters) {
+      const xs = center.corners.map((c) => c.point.x);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const key = Math.floor(center.point.y / BAND_HEIGHT);
+      const existing = bandMap.get(key);
+      if (existing) {
+        existing.minX = Math.min(existing.minX, minX);
+        existing.maxX = Math.max(existing.maxX, maxX);
+        existing.sumY += center.point.y;
+        existing.count++;
+      } else {
+        bandMap.set(key, { minX, maxX, sumY: center.point.y, count: 1 });
+      }
+    }
+
+    // Sort bands top-to-bottom and take every other one for comfortable spacing.
+    const sortedBands = Array.from(bandMap.values()).sort((a, b) => a.sumY / a.count - b.sumY / b.count);
+
+    for (let i = 0; i < sortedBands.length; i += 2) {
+      const band = sortedBands[i];
+      const fullSpan = band.maxX - band.minX;
+      if (fullSpan < 20) continue; // skip degenerate slivers
+
+      // Use the centered half of the band's x-extent.
+      const mid = band.minX + fullSpan / 2;
+      const startX = mid - fullSpan / 4;
+      const endX = mid + fullSpan / 4;
+
+      const y = band.sumY / band.count;
+      // Slow, discrete step rate: 15–29 ticks between advances (~2–4 steps/sec).
+      const stepInterval = 15 + Math.floor(rng() * 15);
+
+      const glitch = new ScrollingTextGlitch('#', startX, endX, y, stepInterval, 5, rng());
+      container.addChild(glitch.container);
+      this.glitchAnimations.push(glitch);
+    }
+  }
+
   resize(width: number, height: number): void {
     if (!this.initialized) return;
     this.app.renderer.resize(width, height);
@@ -1453,6 +1536,10 @@ export class MapRenderer {
 
   destroy(): void {
     if (this.initialized) {
+      for (const glitch of this.glitchAnimations) {
+        glitch.destroy();
+      }
+      this.glitchAnimations = [];
       this.app.ticker.stop();
       this.app.destroy(true);
       this.initialized = false;
