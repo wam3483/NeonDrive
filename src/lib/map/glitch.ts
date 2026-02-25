@@ -38,6 +38,7 @@ export class ScrollingTextGlitch implements GlitchAnimation {
   private currentX: number;
   private stepTimer: number = 0;
   private posHistory: number[];   // [0] = most recent past position
+  private showing: boolean = false;
 
   constructor(
     str: string,
@@ -68,12 +69,12 @@ export class ScrollingTextGlitch implements GlitchAnimation {
     const redStyle = new TextStyle({
       fontFamily: '"Courier New", Courier, monospace',
       fontSize: 10,
-      fill: 0xff1100,
+      fill: 0xff0088,  // hot pink
     });
     const blueStyle = new TextStyle({
       fontFamily: '"Courier New", Courier, monospace',
       fontSize: 10,
-      fill: 0x0044ff,
+      fill: 0x40e8d8,  // coastline teal
     });
 
     // Measure width once to set the step distance.
@@ -122,6 +123,10 @@ export class ScrollingTextGlitch implements GlitchAnimation {
     this.mainText.x = this.currentX;
     this.mainText.y = y;
     this.container.addChild(this.mainText);
+
+    // Roll initial visibility: 20 % chance to show on the first cycle.
+    this.showing = Math.random() < 0.2;
+    this.container.visible = this.showing;
   }
 
   update(deltaTime: number): void {
@@ -135,7 +140,16 @@ export class ScrollingTextGlitch implements GlitchAnimation {
 
     // Advance main text by one character width; wrap at endX.
     this.currentX += this.widthInterval;
-    if (this.currentX >= this.endX) this.currentX = this.startX;
+    if (this.currentX >= this.endX) {
+      // Pick a new random start position snapped to the widthInterval grid.
+      const numSteps = Math.max(1, Math.floor((this.endX - this.startX) / this.widthInterval));
+      this.currentX = this.startX + Math.floor(Math.random() * numSteps) * this.widthInterval;
+      // Clear trail so ghosts don't bleed in from the previous position.
+      this.posHistory = Array(this.trailLength).fill(this.currentX);
+      // Re-roll the 20 % visibility chance for the new cycle.
+      this.showing = Math.random() < 0.2;
+      this.container.visible = this.showing;
+    }
     this.mainText.x = this.currentX;
 
     // Reposition each ghost to its slot in the history.

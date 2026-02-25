@@ -1506,11 +1506,16 @@ export class MapRenderer {
       }
     }
 
-    // Sort bands top-to-bottom and take every other one for comfortable spacing.
-    const sortedBands = Array.from(bandMap.values()).sort((a, b) => a.sumY / a.count - b.sumY / b.count);
+    // Shuffle bands with the seeded RNG so placement is random across the full
+    // purple zone rather than always biased toward the top.
+    const bands = Array.from(bandMap.values());
+    for (let i = bands.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [bands[i], bands[j]] = [bands[j], bands[i]];
+    }
 
-    for (let i = 0; i < sortedBands.length; i += 2) {
-      const band = sortedBands[i];
+    for (let i = 0; i < bands.length && this.glitchAnimations.length < 2; i += 1) {
+      const band = bands[i];
       const fullSpan = band.maxX - band.minX;
       if (fullSpan < 20) continue; // skip degenerate slivers
 
@@ -1520,8 +1525,8 @@ export class MapRenderer {
       const endX = mid + fullSpan / 4;
 
       const y = band.sumY / band.count;
-      // Slow, discrete step rate: 15–29 ticks between advances (~2–4 steps/sec).
-      const stepInterval = 15 + Math.floor(rng() * 15);
+      // Doubled speed: 4–7 ticks between advances (was 8–14).
+      const stepInterval = 4 + Math.floor(rng() * 4);
 
       const glitch = new ScrollingTextGlitch('#', startX, endX, y, stepInterval, 5, rng());
       container.addChild(glitch.container);
