@@ -129,12 +129,14 @@ export class MapRenderer {
   private shoreGraphics: Graphics | null = null;
   private landGraphics: Graphics | null = null;
   private coastOutlineGraphics: Graphics | null = null;
+  private purpleBoundaryGraphics: Graphics | null = null;
   private townGraphics: Graphics | null = null;
   private roadGraphics: Graphics | null = null;
   private cloudGraphics: Graphics | null = null;
   private oceanCenters: Center[] = [];  // True ocean only
   private lakeCenters: Center[] = [];   // Inland water (lakes, marshes)
   private coastlineEdges: Edge[] = [];
+  private purpleBoundaryChains: { x: number; y: number }[][] = [];
   private towns: Town[] = [];
   private roads: Road[] = [];
   private clouds: Cloud[] = [];
@@ -317,6 +319,11 @@ export class MapRenderer {
       this.drawCoastlineOutline(this.coastOutlineGraphics, this.animationTime);
     }
 
+    // Purple zone perimeter glow pulses continuously
+    if (this.purpleBoundaryGraphics) {
+      this.drawPurpleBoundary(this.purpleBoundaryGraphics, this.animationTime);
+    }
+
     // Clouds animate smoothly (not stepped) for dreamlike drift
     if (this.cloudGraphics && this.clouds.length > 0) {
       this.drawClouds(this.cloudGraphics, this.animationTime);
@@ -331,6 +338,8 @@ export class MapRenderer {
     this.lakeCenters = mapData.centers.filter(c => c.water && !c.ocean);
     // Cache coastline edges (edges between ocean and land)
     this.coastlineEdges = this.findCoastlineEdges(mapData);
+    // Cache connected chains along the purple zone perimeter
+    this.purpleBoundaryChains = this.buildPurpleBoundaryChains(mapData);
     // Build noisy edge paths and cache polygon point arrays
     const noisyEdges = buildNoisyEdges(mapData, mapData.config.seed);
     this.noisyPolygons = new Map();
@@ -403,6 +412,97 @@ export class MapRenderer {
     }
 
     return coastEdges;
+  }
+
+  /** Trace boundary edges into connected polyline chains so each chain can be
+   *  drawn as a single stroke, eliminating overlap artifacts at shared corners. */
+  private buildPurpleBoundaryChains(mapData: MapData): { x: number; y: number }[][] {
+    const PURPLE = new Set(['TUNDRA', 'BARE', 'SCORCHED']);
+
+    // Collect qualifying edges and build a corner adjacency list.
+    const adj = new Map<number, number[]>();
+    const pts = new Map<number, { x: number; y: number }>();
+
+    for (const edge of mapData.edges) {
+      if (!edge.d0 || !edge.d1 || !edge.v0 || !edge.v1) continue;
+
+      const d0Purple = PURPLE.has(edge.d0.biome);
+      const d1Purple = PURPLE.has(edge.d1.biome);
+      if (d0Purple === d1Purple) continue;
+
+      const nonPurple = d0Purple ? edge.d1 : edge.d0;
+      if (nonPurple.water || nonPurple.ocean) continue;
+
+      const i0 = edge.v0.index, i1 = edge.v1.index;
+      pts.set(i0, edge.v0.point);
+      pts.set(i1, edge.v1.point);
+      if (!adj.has(i0)) adj.set(i0, []);
+      if (!adj.has(i1)) adj.set(i1, []);
+      adj.get(i0)!.push(i1);
+      adj.get(i1)!.push(i0);
+    }
+
+    // Greedy edge-chain tracing: each edge is visited exactly once.
+    const edgeKey = (a: number, b: number) => a < b ? `${a},${b}` : `${b},${a}`;
+    const visitedEdges = new Set<string>();
+    const chains: { x: number; y: number }[][] = [];
+
+    for (const startId of adj.keys()) {
+      // Find an unvisited edge leaving this corner to begin a new chain.
+      const firstNeighbor = (adj.get(startId) ?? [])
+        .find(n => !visitedEdges.has(edgeKey(startId, n)));
+      if (firstNeighbor === undefined) continue;
+
+      const chain: { x: number; y: number }[] = [pts.get(startId)!];
+      visitedEdges.add(edgeKey(startId, firstNeighbor));
+      chain.push(pts.get(firstNeighbor)!);
+      let current = firstNeighbor;
+
+      // Extend the chain greedily until no unvisited edges remain.
+      while (true) {
+        const next = (adj.get(current) ?? [])
+          .find(n => !visitedEdges.has(edgeKey(current, n)));
+        if (next === undefined) break;
+        visitedEdges.add(edgeKey(current, next));
+        chain.push(pts.get(next)!);
+        current = next;
+      }
+
+      chains.push(chain);
+    }
+
+    return chains;
+  }
+
+  private drawPurpleBoundary(graphics: Graphics, time: number): void {
+    if (!this.purpleBoundaryChains.length) return;
+
+    graphics.clear();
+
+    // Pulse at a different speed/phase from the teal coastline.
+    const pulse = 0.5 + 0.5 * Math.sin(time * 0.35 + 1.8);
+
+    const outerAlpha = 0.08 + 0.10 * pulse;  // wide halo:  0.08 → 0.18
+    const midAlpha   = 0.18 + 0.22 * pulse;  // mid bloom:  0.18 → 0.40
+    const coreAlpha  = 0.40 + 0.45 * pulse;  // bright core: 0.40 → 0.85
+    const coreWidth  = 1.0  + 0.6  * pulse;  // core width:  1.0  → 1.6
+
+    for (const chain of this.purpleBoundaryChains) {
+      if (chain.length < 2) continue;
+
+      // Each pass draws the entire chain as one continuous stroke — no seams.
+      for (const [width, color, alpha] of [
+        [10,        0xff0088, outerAlpha],
+        [4,         0xcc44ff, midAlpha],
+        [coreWidth, 0xff88ee, coreAlpha],
+      ] as [number, number, number][]) {
+        graphics.moveTo(chain[0].x, chain[0].y);
+        for (let i = 1; i < chain.length; i++) {
+          graphics.lineTo(chain[i].x, chain[i].y);
+        }
+        graphics.stroke({ width, color, alpha, cap: 'round', join: 'round' });
+      }
+    }
   }
 
   setOptions(options: Partial<RenderOptions>): void {
@@ -478,6 +578,11 @@ export class MapRenderer {
         this.buildGlitchAnimations(this.glitchContainer);
         this.mapContainer.addChild(this.glitchContainer);
       }
+
+      // Hot-pink glow along the purple zone perimeter
+      this.purpleBoundaryGraphics = new Graphics();
+      this.drawPurpleBoundary(this.purpleBoundaryGraphics, this.animationTime);
+      this.mapContainer.addChild(this.purpleBoundaryGraphics);
 
       // Teal pulsing outline along every ocean↔land edge
       this.coastOutlineGraphics = new Graphics();
