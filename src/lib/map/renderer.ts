@@ -1021,18 +1021,20 @@ export class MapRenderer {
       const s = glowStrength(i, hGlowIdx);
       if (s < 0.02) continue;
       const y = i * cellSize;
-      traceLine(true, y, 6,   0xdd66dd, 0.04 * s);
-      traceLine(true, y, 2.5, 0xee88ee, 0.15 * s);
-      traceLine(true, y, 1,   0xffffff, 0.28 * s);
+      traceLine(true, y, 22,  0xcc44cc, 0.03 * s);  // wide outer halo
+      traceLine(true, y, 12,  0xdd66dd, 0.07 * s);  // mid bloom
+      traceLine(true, y, 5,   0xee88ee, 0.20 * s);  // inner bloom
+      traceLine(true, y, 1.5, 0xffffff, 0.55 * s);  // bright core
     }
 
     for (let i = 0; i < numV; i++) {
       const s = glowStrength(i, vGlowIdx);
       if (s < 0.02) continue;
       const x = i * cellSize;
-      traceLine(false, x, 6,   0xdd66dd, 0.04 * s);
-      traceLine(false, x, 2.5, 0xee88ee, 0.15 * s);
-      traceLine(false, x, 1,   0xffffff, 0.28 * s);
+      traceLine(false, x, 22,  0xcc44cc, 0.03 * s);
+      traceLine(false, x, 12,  0xdd66dd, 0.07 * s);
+      traceLine(false, x, 5,   0xee88ee, 0.20 * s);
+      traceLine(false, x, 1.5, 0xffffff, 0.55 * s);
     }
   }
 
