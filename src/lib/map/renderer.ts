@@ -51,10 +51,10 @@ const DEFAULT_RENDER_OPTIONS: RenderOptions = {
 
 // Town marker colors by type
 const TOWN_COLORS = {
-  shoreline: { fill: 0xf5d742, stroke: 0x8b6914 },    // Gold - port towns
-  river: { fill: 0x42adf5, stroke: 0x1a5a8c },       // Blue - river towns
-  elevation: { fill: 0xd9d9d9, stroke: 0x666666 },   // Silver - mountain towns
-  inland: { fill: 0x8b5a2b, stroke: 0x4a2f17 },      // Brown - inland towns
+  shoreline: { fill: 0x00ffdd, stroke: 0x007a6a },  // Cyan  - echoes coastline glow
+  river:     { fill: 0x8866ff, stroke: 0x331a99 },  // Electric violet - echoes ocean grid
+  elevation: { fill: 0xff44aa, stroke: 0x880033 },  // Hot pink - echoes purple zone boundary
+  inland:    { fill: 0x99ff33, stroke: 0x336600 },  // Acid lime - contrast to purple tones
 };
 
 // Deep indigo-purple ocean palette (synthwave map style)
@@ -774,54 +774,88 @@ export class MapRenderer {
     }
   }
 
-  // Large town: Castle/fortress icon with towers
+  // Large town: Art Deco skyscraper in fixed-point perspective (view from upper-left-front)
   private drawLargeTownIcon(
     graphics: Graphics,
     colors: { fill: number; stroke: number }
   ): void {
-    const size = 10;
+    const s = 10;
 
-    // Outer glow/stroke
-    graphics.roundRect(-size - 1, -size - 1, size * 2 + 2, size * 2 + 2, 2);
-    graphics.fill(colors.stroke);
+    // ── Perspective parameters ───────────────────────────────────────────────
+    // Each unit of depth shifts the back edge right by PX and up by |PY|.
+    const PX = 3.0;
+    const PY = -1.5;
 
-    // Main building body
-    graphics.roundRect(-size + 1, -size * 0.5, size * 2 - 2, size * 1.5, 1);
-    graphics.fill(colors.fill);
+    // Derive shadow-side and roof colors from the fill.
+    const dim = (c: number, f: number) => {
+      const r = Math.floor(((c >> 16) & 0xff) * f);
+      const g = Math.floor(((c >>  8) & 0xff) * f);
+      const b = Math.floor(( c        & 0xff) * f);
+      return (r << 16) | (g << 8) | b;
+    };
+    const sideColor = dim(colors.fill, 0.45);  // right face in shadow
+    const roofColor = dim(colors.fill, 0.80);  // top ledges slightly dim
 
-    // Left tower
-    graphics.rect(-size + 1, -size, 4, size * 0.6);
-    graphics.fill(colors.fill);
-    // Tower top (battlement)
-    graphics.rect(-size, -size - 2, 2, 3);
-    graphics.fill(colors.fill);
-    graphics.rect(-size + 3, -size - 2, 2, 3);
-    graphics.fill(colors.fill);
+    // ── Building sections (bottom → top): { hw: half-width, topY } ──────────
+    const baseY = s * 0.50;
+    const sections = [
+      { hw: s * 0.90, topY:  s * 0.18 },  // podium
+      { hw: s * 0.68, topY: -s * 0.80 },  // main body / wings
+      { hw: s * 0.28, topY: -s * 1.38 },  // tower
+      { hw: s * 0.16, topY: -s * 1.60 },  // upper step
+      { hw: s * 0.05, topY: -s * 1.90 },  // spire
+    ];
 
-    // Right tower
-    graphics.rect(size - 5, -size, 4, size * 0.6);
-    graphics.fill(colors.fill);
-    // Tower top (battlement)
-    graphics.rect(size - 5, -size - 2, 2, 3);
-    graphics.fill(colors.fill);
-    graphics.rect(size - 2, -size - 2, 2, 3);
-    graphics.fill(colors.fill);
+    // ── Draw each section bottom-to-top: side → roof ledge → front ──────────
+    // Painter's order: wider lower sections drawn first; each section's front
+    // face naturally masks the inner portion of the section below's roof ledge,
+    // leaving only the true ledge (the setback overhang) visible.
+    let prevBotY = baseY;
+    for (const { hw, topY } of sections) {
+      const botY = prevBotY;
 
-    // Center tower (taller)
-    graphics.rect(-2, -size - 1, 4, size * 0.7);
-    graphics.fill(colors.fill);
-    // Center battlement
-    graphics.rect(-2, -size - 3, 1.5, 3);
-    graphics.fill(colors.fill);
-    graphics.rect(0.5, -size - 3, 1.5, 3);
-    graphics.fill(colors.fill);
+      // Right side face (parallelogram — shadow side)
+      graphics.poly([
+         hw,       botY,
+         hw + PX,  botY + PY,
+         hw + PX,  topY + PY,
+         hw,       topY,
+      ]);
+      graphics.fill(sideColor);
 
-    // Gate/door
-    graphics.roundRect(-1.5, size * 0.3, 3, 4, 1);
-    graphics.fill(colors.stroke);
+      // Top / roof ledge (parallelogram — only the overhang will survive
+      // once the next section's front face is drawn on top of the center)
+      graphics.poly([
+        -hw,       topY,
+        -hw + PX,  topY + PY,
+         hw + PX,  topY + PY,
+         hw,       topY,
+      ]);
+      graphics.fill(roofColor);
 
-    // Highlight
-    graphics.rect(-size + 2, -size + 1, 2, 2);
+      // Front face (flat — covers the inner roof, exposing only the ledge)
+      graphics.rect(-hw, topY, hw * 2, botY - topY);
+      graphics.fill(colors.fill);
+
+      prevBotY = topY;
+    }
+
+    // ── Vertical window lines on main body (front face) ──────────────────────
+    const body = sections[1];
+    const bodyH = sections[0].topY - body.topY;
+    for (const wx of [-body.hw * 0.45, 0, body.hw * 0.45]) {
+      graphics.rect(wx - 0.5, body.topY + 1.5, 1, bodyH - 3);
+      graphics.fill({ color: colors.stroke, alpha: 0.40 });
+    }
+
+    // ── Single centre window line on tower ───────────────────────────────────
+    const tower = sections[2];
+    const towerH = sections[1].topY - tower.topY;
+    graphics.rect(-0.5, tower.topY + 1.5, 1, towerH - 3);
+    graphics.fill({ color: colors.stroke, alpha: 0.40 });
+
+    // ── Highlight glint on top-left corner of main body ───────────────────────
+    graphics.rect(-body.hw + 1, body.topY + 1, 1.5, 3);
     graphics.fill(0xffffff);
   }
 
