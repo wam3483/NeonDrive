@@ -7,7 +7,7 @@ import {
 
 export interface MusicConfig {
   bpm:           number;
-  keyRoot:       string;   // e.g. 'F'
+  keyRoot:       string;   // e.g. 'A'
   progression:   string;   // key into PROGRESSIONS
   electronicMix: number;   // 0–1: acoustic bossa ↔ electronic
   reverbAmount:  number;   // 0–1
@@ -16,19 +16,23 @@ export interface MusicConfig {
   drumsLevel:    number;   // 0–1
   arpEnabled:    boolean;
   arpSpeed:      number;   // 1=quarter | 2=8th | 4=16th
+  seed:          number;   // 0–999
+  leadLevel:     number;   // 0–1
 }
 
 export const DEFAULT_CONFIG: MusicConfig = {
   bpm:           100,
-  keyRoot:       'F',
-  progression:   'Classic',
-  electronicMix: 0.35,
+  keyRoot:       'A',
+  progression:   'Outrun',
+  electronicMix: 0.5,
   reverbAmount:  0.5,
   bassLevel:     0.8,
   padLevel:      0.65,
   drumsLevel:    0.75,
   arpEnabled:    false,
   arpSpeed:      4,
+  seed:          42,
+  leadLevel:     0.55,
 };
 
 // ─── Drum patterns (16 steps, velocity 0–1, 0 = silent) ──────────────────────
@@ -43,19 +47,35 @@ const RIM_A   = [0,0,.6,0, 0,.5,0,0, 0,0,.6,0, 0,.5,0,0];
 // Snare: 2 and 4
 const SNARE_E = [0,0,0,0, .8,0,0,0, 0,0,0,0, .8,0,0,0];
 
-// Closed hi-hat
-const HH_A    = [.7,0,.5,0, .6,0,.5,0, .7,0,.5,0, .6,0,.5,0]; // 8th notes
-const HH_E    = [.5,.4,.5,.4, .5,.4,.5,.4, .5,.4,.5,.4, .5,.4,.5,.4]; // 16ths
-
-// Open hi-hat: on the "and" of 2 and 4
+// Acoustic bossa hi-hat: 8th notes with open hat on "and of 2" and "and of 4"
+const HH_A    = [.7,0,.5,0, .6,0,.5,0, .7,0,.5,0, .6,0,.5,0];
 const OH_A    = [0,0,0,0, 0,0,0,.5, 0,0,0,0, 0,0,0,.5];
-const OH_E    = [0,0,0,0, 0,0,.4,0, 0,0,0,0, 0,0,.4,0];
 
-// Bass patterns: 1 = play root, 0 = rest
-// Acoustic bossa: root on 1, "and of 2", "and of 3"
+// Bass patterns
 const BASS_A  = [1,0,0,0, 0,0,1,0, 0,1,0,0, 0,0,0,0];
-// Electronic: quarter-note pump
 const BASS_E  = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0];
+
+// ─── Hi-hat templates (4 styles) ─────────────────────────────────────────────
+
+const HH_TEMPLATES: number[][] = [
+  [.7,0,.6,0,  .7,0,.6,0,  .7,0,.6,0,  .7,0,.6,0 ],  // straight 8ths
+  [.7,.3,.6,.2, .7,.3,.6,.2, .7,.3,.6,.2, .7,.3,.6,.2], // 8ths + ghost 16ths
+  [.7,.4,.4,0,  .7,.4,.4,0,  .7,.4,.4,0,  .7,.4,.4,0 ], // gallop
+  [.6,.5,.6,.5, .6,.5,.6,.5, .6,.5,.6,.5, .6,.5,.6,.5], // driving 16ths
+];
+
+// ─── Seed data ───────────────────────────────────────────────────────────────
+
+interface SeedData {
+  hihat:            number[][];  // [4 bars][16 steps] closed HH velocity
+  openHH:           number[][];  // [4 bars][16 steps] open HH velocity
+  fillKick:         number[];    // [16] fill kick velocities
+  fillSnare:        number[];    // [16] fill snare velocities
+  fillHH:           number[];    // [16] fill HH velocities (light 16ths)
+  leadDensity:      number;      // 0–1: controls notes-per-bar count
+  leadSyncopation:  number;      // 0=on-beat preference, 1=off-beat preference
+  leadOctaveChance: number;      // 0–1: probability of playing high octave
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -67,31 +87,49 @@ function blendPattern(a: number[], b: number[], t: number): number[] {
   return a.map((av, i) => lerp(av, b[i], t));
 }
 
+// Xorshift32 seeded RNG — returns values in [0, 1)
+function mkRng(seed: number): () => number {
+  let s = (seed >>> 0) || 1;
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 0xFFFFFFFF;
+  };
+}
+
 // ─── Engine ──────────────────────────────────────────────────────────────────
 
 export class MusicEngine {
-  private ctx:             AudioContext | null = null;
-  private masterGain!:     GainNode;
-  private reverbNode!:     ConvolverNode;
-  private reverbGain!:     GainNode;
-  private dryGain!:        GainNode;
-  private drumBus!:        GainNode;
-  private bassBus!:        GainNode;
-  private padBus!:         GainNode;
-  private arpBus!:         GainNode;
-  private analyserNode!:   AnalyserNode;
-  private noiseBuffer:     AudioBuffer | null = null;
+  private ctx:           AudioContext | null = null;
+  private masterGain!:   GainNode;
+  private reverbNode!:   ConvolverNode;
+  private reverbGain!:   GainNode;
+  private dryGain!:      GainNode;
+  private drumBus!:      GainNode;
+  private bassBus!:      GainNode;
+  private padBus!:       GainNode;
+  private arpBus!:       GainNode;
+  private leadBus!:      GainNode;
+  private analyserNode!: AnalyserNode;
+  private noiseBuffer:   AudioBuffer | null = null;
 
-  private schedulerId:     ReturnType<typeof setTimeout> | null = null;
-  private nextNoteTime  =  0;
-  private currentStep   =  0;
-  private currentBar    =  0;
-  private arpIndex      =  0;
+  private schedulerId:   ReturnType<typeof setTimeout> | null = null;
+  private nextNoteTime = 0;
+  private currentStep  = 0;
+  private currentBar   = 0;
+  private arpIndex     = 0;
+  private prevSeed:      number   = DEFAULT_CONFIG.seed;
+  private seedData!:     SeedData;
+  private leadPattern = {
+    steps: new Array(16).fill(0)     as number[],
+    notes: new Array(16).fill(0)     as number[],
+    high:  new Array(16).fill(false) as boolean[],
+  };
 
   config:    MusicConfig = { ...DEFAULT_CONFIG };
   isPlaying: boolean     = false;
 
-  /** Called (from main thread, timed to audio) on every 16th-note step */
   onStep: ((step: number, bar: number) => void) | null = null;
 
   getAnalyser(): AnalyserNode | null {
@@ -127,15 +165,21 @@ export class MusicEngine {
   updateConfig(partial: Partial<MusicConfig>): void {
     this.config = { ...this.config, ...partial };
     if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    const tc = 0.05; // smoothing time constant
-    this.drumBus.gain.setTargetAtTime(this.config.drumsLevel * 0.9, t, tc);
-    this.bassBus.gain.setTargetAtTime(this.config.bassLevel,        t, tc);
-    this.padBus.gain.setTargetAtTime(this.config.padLevel  * 0.35,  t, tc);
+    const t  = this.ctx.currentTime;
+    const tc = 0.05;
+    this.drumBus.gain.setTargetAtTime(this.config.drumsLevel * 0.9,                    t, tc);
+    this.bassBus.gain.setTargetAtTime(this.config.bassLevel,                           t, tc);
+    this.padBus.gain.setTargetAtTime( this.config.padLevel   * 0.35,                   t, tc);
     this.arpBus.gain.setTargetAtTime(
-      this.config.arpEnabled ? this.config.padLevel * 0.22 : 0,     t, tc
+      this.config.arpEnabled ? this.config.padLevel * 0.22 : 0,                        t, tc
     );
-    this.reverbGain.gain.setTargetAtTime(this.config.reverbAmount,  t, tc);
+    this.reverbGain.gain.setTargetAtTime(this.config.reverbAmount,                     t, tc);
+    this.leadBus.gain.setTargetAtTime(   this.config.leadLevel * 0.28,                 t, tc);
+
+    if (this.config.seed !== this.prevSeed) {
+      this.prevSeed = this.config.seed;
+      this.seedData = this.generateSeedData(this.config.seed);
+    }
   }
 
   // ── Initialisation ────────────────────────────────────────────────────────
@@ -143,24 +187,21 @@ export class MusicEngine {
   private async setup(): Promise<void> {
     this.ctx = new AudioContext();
 
-    this.masterGain  = this.ctx.createGain();
+    this.masterGain            = this.ctx.createGain();
     this.masterGain.gain.value = 0.85;
 
-    this.analyserNode           = this.ctx.createAnalyser();
-    this.analyserNode.fftSize   = 256;
+    this.analyserNode                       = this.ctx.createAnalyser();
+    this.analyserNode.fftSize               = 256;
     this.analyserNode.smoothingTimeConstant = 0.8;
 
-    // Reverb
-    this.reverbNode   = this.ctx.createConvolver();
+    this.reverbNode        = this.ctx.createConvolver();
     this.reverbNode.buffer = this.buildReverbImpulse(2.2, 2.8);
-    this.reverbGain   = this.ctx.createGain();
+    this.reverbGain        = this.ctx.createGain();
     this.reverbGain.gain.value = this.config.reverbAmount;
 
-    // Dry / wet
-    this.dryGain = this.ctx.createGain();
+    this.dryGain           = this.ctx.createGain();
     this.dryGain.gain.value = 1;
 
-    // Instrument buses
     this.drumBus = this.ctx.createGain();
     this.drumBus.gain.value = this.config.drumsLevel * 0.9;
     this.bassBus = this.ctx.createGain();
@@ -169,9 +210,10 @@ export class MusicEngine {
     this.padBus.gain.value  = this.config.padLevel * 0.35;
     this.arpBus  = this.ctx.createGain();
     this.arpBus.gain.value  = this.config.arpEnabled ? this.config.padLevel * 0.22 : 0;
+    this.leadBus = this.ctx.createGain();
+    this.leadBus.gain.value = this.config.leadLevel * 0.28;
 
-    // Route all buses to both dry and reverb
-    for (const bus of [this.drumBus, this.bassBus, this.padBus, this.arpBus]) {
+    for (const bus of [this.drumBus, this.bassBus, this.padBus, this.arpBus, this.leadBus]) {
       bus.connect(this.dryGain);
       bus.connect(this.reverbNode);
     }
@@ -182,6 +224,8 @@ export class MusicEngine {
     this.analyserNode.connect(this.ctx.destination);
 
     this.noiseBuffer = this.buildNoiseBuffer(2);
+    this.seedData    = this.generateSeedData(this.config.seed);
+    this.prevSeed    = this.config.seed;
   }
 
   private buildNoiseBuffer(seconds: number): AudioBuffer {
@@ -206,19 +250,81 @@ export class MusicEngine {
     return buf;
   }
 
+  // ── Seed data generation ──────────────────────────────────────────────────
+
+  private generateSeedData(seed: number): SeedData {
+    const rng = mkRng(seed);
+
+    // Hi-hats: 4 bars, each picks a template with velocity jitter
+    const hihat:  number[][] = [];
+    const openHH: number[][] = [];
+
+    for (let b = 0; b < 4; b++) {
+      const tmplIdx = Math.floor(rng() * HH_TEMPLATES.length);
+      const tmpl    = HH_TEMPLATES[tmplIdx];
+      const hhBar: number[] = tmpl.map(v => v > 0 ? Math.max(0, v + (rng() - 0.5) * 0.2) : 0);
+      const ohBar: number[] = new Array(16).fill(0);
+
+      // Place 0–2 open hi-hats on "and" positions (steps 6, 7, 14, 15)
+      const andPositions = [6, 7, 14, 15];
+      const numOpen      = Math.floor(rng() * 3);
+      const shuffled     = [...andPositions].sort(() => rng() - 0.5);
+      for (let i = 0; i < numOpen; i++) {
+        const pos  = shuffled[i];
+        ohBar[pos] = 0.4 + rng() * 0.2;
+        hhBar[pos] = 0; // suppress closed HH at open positions
+      }
+
+      hihat.push(hhBar);
+      openHH.push(ohBar);
+    }
+
+    // Fill patterns (bar 3 of every 4-bar phrase)
+    const fillKick:  number[] = new Array(16).fill(0);
+    const fillSnare: number[] = new Array(16).fill(0);
+    const fillHH:    number[] = new Array(16).fill(0);
+
+    // Light 16th HH underneath all fill types
+    for (let i = 0; i < 16; i++) fillHH[i] = 0.3 + rng() * 0.1;
+
+    const fillType = Math.floor(rng() * 3);
+    if (fillType === 0) {
+      // Snare 8th roll with crescendo, kick on 1
+      fillKick[0] = 0.9;
+      for (let i = 0; i < 8; i++) fillSnare[i * 2] = 0.4 + (i / 7) * 0.5;
+    } else if (fillType === 1) {
+      // Kick on 1+3, 16th snare roll from beat 3
+      fillKick[0] = 0.9;
+      fillKick[8] = 0.8;
+      for (let i = 8; i < 16; i++) fillSnare[i] = 0.5 + ((i - 8) / 7) * 0.4;
+    } else {
+      // Alternating kick/snare 8ths
+      for (let i = 0; i < 8; i++) {
+        if (i % 2 === 0) fillKick[i * 2]  = 0.7 + rng() * 0.2;
+        else             fillSnare[i * 2] = 0.6 + rng() * 0.3;
+      }
+    }
+
+    // Lead style — per-bar patterns are generated live in regenLeadPattern()
+    const leadDensity      = 0.25 + rng() * 0.4;   // controls note count per bar
+    const leadSyncopation  = rng();                  // 0=on-beat, 1=off-beat
+    const leadOctaveChance = 0.1  + rng() * 0.35;  // chance of high octave
+
+    return { hihat, openHH, fillKick, fillSnare, fillHH, leadDensity, leadSyncopation, leadOctaveChance };
+  }
+
   // ── Scheduler ─────────────────────────────────────────────────────────────
 
   private schedule(): void {
     if (!this.isPlaying || !this.ctx) return;
 
-    const stepDur = 60 / (this.config.bpm * 4); // 16th-note duration in seconds
+    const stepDur = 60 / (this.config.bpm * 4);
 
     while (this.nextNoteTime < this.ctx.currentTime + 0.12) {
       this.scheduleStep(this.currentStep, this.currentBar, this.nextNoteTime);
 
-      // Fire UI callback timed to the actual audio beat
-      const step = this.currentStep;
-      const bar  = this.currentBar;
+      const step  = this.currentStep;
+      const bar   = this.currentBar;
       const delay = Math.max(0, (this.nextNoteTime - this.ctx.currentTime) * 1000);
       setTimeout(() => { if (this.onStep) this.onStep(step, bar); }, delay);
 
@@ -231,25 +337,34 @@ export class MusicEngine {
   }
 
   private scheduleStep(step: number, bar: number, time: number): void {
-    const mix     = this.config.electronicMix;
-    const stepDur = 60 / (this.config.bpm * 4);
-    const chord   = this.getCurrentChord(bar);
-    const keyPc   = NOTE_NAMES.indexOf(this.config.keyRoot);
+    const mix       = this.config.electronicMix;
+    const stepDur   = 60 / (this.config.bpm * 4);
+    const chord     = this.getCurrentChord(bar);
+    const keyPc     = NOTE_NAMES.indexOf(this.config.keyRoot);
+    const sd        = this.seedData;
+    const phraseBar = bar % 4;
+    const isFill    = phraseBar === 3;
 
     // ── Drums ──────────────────────────────────────────────────────────────
-    const kickVel = blendPattern(KICK_A, KICK_E, mix)[step];
-    if (kickVel > 0.02) this.playKick(time, kickVel);
+    if (isFill) {
+      if (sd.fillKick[step]  > 0.02) this.playKick(time,  sd.fillKick[step]);
+      if (sd.fillSnare[step] > 0.02) this.playSnare(time, sd.fillSnare[step]);
+      if (sd.fillHH[step]    > 0.02) this.playHihat(time, sd.fillHH[step], false);
+    } else {
+      const kickVel = blendPattern(KICK_A, KICK_E, mix)[step];
+      if (kickVel > 0.02) this.playKick(time, kickVel);
 
-    const rimVel  = RIM_A[step] * (1 - mix);
-    if (rimVel  > 0.02) this.playRim(time, rimVel);
+      const rimVel = RIM_A[step] * (1 - mix);
+      if (rimVel  > 0.02) this.playRim(time, rimVel);
 
-    const snareVel = SNARE_E[step] * mix;
-    if (snareVel > 0.02) this.playSnare(time, snareVel);
+      const snareVel = SNARE_E[step] * mix;
+      if (snareVel > 0.02) this.playSnare(time, snareVel);
 
-    const ohVel = blendPattern(OH_A, OH_E, mix)[step];
-    const hhVel = blendPattern(HH_A, HH_E, mix)[step];
-    if (ohVel > 0.02)      this.playHihat(time, ohVel, true);
-    else if (hhVel > 0.02) this.playHihat(time, hhVel, false);
+      const ohVel = lerp(OH_A[step], sd.openHH[phraseBar][step], mix);
+      const hhVel = lerp(HH_A[step], sd.hihat[phraseBar][step],  mix);
+      if (ohVel > 0.02)      this.playHihat(time, ohVel, true);
+      else if (hhVel > 0.02) this.playHihat(time, hhVel, false);
+    }
 
     // ── Bass ───────────────────────────────────────────────────────────────
     const bassVel = blendPattern(BASS_A, BASS_E, mix)[step];
@@ -274,10 +389,47 @@ export class MusicEngine {
       this.playArp(time, freq, stepDur * 0.8, 0.75);
       this.arpIndex++;
     }
+
+    // ── Lead melody ────────────────────────────────────────────────────────
+    if (step === 0) this.regenLeadPattern(bar);
+    if (this.leadPattern.steps[step] > 0.02) {
+      const octave  = this.leadPattern.high[step] ? 5 : 4;
+      const midis   = getChordMidis(keyPc, chord, octave);
+      const noteIdx = this.leadPattern.notes[step] % midis.length;
+      this.playLead(time, midiToFreq(midis[noteIdx]), stepDur * 1.8, this.leadPattern.steps[step]);
+    }
+  }
+
+  private regenLeadPattern(bar: number): void {
+    const rng        = mkRng(this.config.seed * 997 + bar);
+    const sd         = this.seedData;
+    const steps      = new Array(16).fill(0)     as number[];
+    const notes      = new Array(16).fill(0)     as number[];
+    const high       = new Array(16).fill(false) as boolean[];
+
+    const allPool    = [0, 2, 3, 4, 6, 7, 8, 10, 12, 14, 15];
+    const offBeatSet = new Set([2, 3, 6, 7, 10, 14, 15]);
+
+    // Score each position: syncopation shifts weight toward off-beats
+    const scored = allPool.map(pos => ({
+      pos,
+      score: (offBeatSet.has(pos) ? sd.leadSyncopation : (1 - sd.leadSyncopation)) + rng() * 0.4,
+    }));
+    scored.sort((a, b) => b.score - a.score);
+
+    const numNotes = Math.max(2, Math.round(3 + sd.leadDensity * 5 + (rng() - 0.5) * 3));
+    for (let i = 0; i < numNotes && i < scored.length; i++) {
+      const pos  = scored[i].pos;
+      steps[pos] = 0.6 + rng() * 0.35;
+      notes[pos] = Math.floor(rng() * 4);
+      high[pos]  = rng() < sd.leadOctaveChance;
+    }
+
+    this.leadPattern = { steps, notes, high };
   }
 
   private getCurrentChord(bar: number): ChordDef {
-    const prog = PROGRESSIONS[this.config.progression] ?? PROGRESSIONS['Classic'];
+    const prog = PROGRESSIONS[this.config.progression] ?? PROGRESSIONS['Outrun'];
     return prog[bar % prog.length];
   }
 
@@ -286,7 +438,6 @@ export class MusicEngine {
   private playKick(time: number, vel: number): void {
     const ctx = this.ctx!;
 
-    // Body: sine with pitch fall
     const osc = ctx.createOscillator();
     const env = ctx.createGain();
     osc.type = 'sine';
@@ -297,7 +448,6 @@ export class MusicEngine {
     osc.connect(env); env.connect(this.drumBus);
     osc.start(time); osc.stop(time + 0.4);
 
-    // Click transient
     const click = ctx.createOscillator();
     const cenv  = ctx.createGain();
     click.type = 'triangle';
@@ -326,7 +476,6 @@ export class MusicEngine {
   private playSnare(time: number, vel: number): void {
     const ctx = this.ctx!;
 
-    // Tone layer
     const osc = ctx.createOscillator();
     const og  = ctx.createGain();
     osc.frequency.value = 185;
@@ -335,7 +484,6 @@ export class MusicEngine {
     osc.connect(og); og.connect(this.drumBus);
     osc.start(time); osc.stop(time + 0.15);
 
-    // Noise layer
     const src  = ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
     const filter = ctx.createBiquadFilter();
@@ -433,5 +581,31 @@ export class MusicEngine {
 
     osc.connect(filter); filter.connect(env); env.connect(this.arpBus);
     osc.start(time); osc.stop(time + duration + 0.01);
+  }
+
+  private playLead(time: number, freq: number, duration: number, vel: number): void {
+    const ctx = this.ctx!;
+    const mix = this.config.electronicMix;
+
+    for (const detune of [-8, 8]) {
+      const osc = ctx.createOscillator();
+      osc.type  = 'sawtooth';
+      osc.frequency.value = freq;
+      osc.detune.value    = detune;
+
+      const filter = ctx.createBiquadFilter();
+      filter.type  = 'lowpass';
+      filter.frequency.value = lerp(1800, 4500, mix);
+      filter.Q.value = 1.2;
+
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0, time);
+      env.gain.linearRampToValueAtTime(vel * 0.4, time + 0.018);
+      env.gain.setValueAtTime(vel * 0.28, time + duration * 0.5);
+      env.gain.exponentialRampToValueAtTime(0.001, time + duration);
+
+      osc.connect(filter); filter.connect(env); env.connect(this.leadBus);
+      osc.start(time); osc.stop(time + duration + 0.01);
+    }
   }
 }

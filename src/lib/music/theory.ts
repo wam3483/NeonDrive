@@ -2,7 +2,7 @@
 
 export const NOTE_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 
-export const KEY_OPTIONS = ['C', 'Db', 'D', 'Eb', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+export const KEY_OPTIONS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 
 export function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
@@ -31,37 +31,44 @@ export interface ChordDef {
   label:  string;
 }
 
-// Five progressions. Offsets are always pitch-class relative (0–11).
+// Five synthwave progressions. Minor-key oriented (keyRoot = minor tonic).
+// Offsets: i=0, III=3, IV=5, VI=8, VII=10, bII=1  |  major: I=0, IV=5, V=7, VI=9
 export const PROGRESSIONS: Record<string, ChordDef[]> = {
-  'Classic': [
-    { offset: 0,  type: 'maj7', label: 'maj7' },
-    { offset: 9,  type: 'min7', label: 'VIm7' },
-    { offset: 2,  type: 'min7', label: 'IIm7' },
-    { offset: 7,  type: 'dom7', label: 'V7'   },
+  'Outrun': [
+    { offset: 0,  type: 'min7', label: 'Im7'     },
+    { offset: 8,  type: 'maj7', label: 'VImaj7'  },
+    { offset: 3,  type: 'maj7', label: 'IIImaj7' },
+    { offset: 10, type: 'maj7', label: 'VIImaj7' },
   ],
-  'Samba': [
-    { offset: 0,  type: 'maj9', label: 'maj9'   },
-    { offset: 5,  type: 'maj7', label: 'IVmaj7' },
-    { offset: 2,  type: 'min9', label: 'IIm9'   },
-    { offset: 7,  type: 'dom9', label: 'V9'     },
+  'Dark Drive': [
+    { offset: 0,  type: 'min9', label: 'Im9'     },
+    { offset: 5,  type: 'min7', label: 'IVm7'    },
+    { offset: 10, type: 'maj7', label: 'VIImaj7' },
+    { offset: 3,  type: 'maj7', label: 'IIImaj7' },
   ],
-  'Ipanema': [
-    { offset: 0,  type: 'maj7', label: 'maj7'    },
-    { offset: 10, type: 'dom7', label: 'bVII7'   },
-    { offset: 10, type: 'min7', label: 'bVIIm7'  },
-    { offset: 3,  type: 'dom7', label: 'bIII7'   },
+  'Neon Sunset': [
+    { offset: 0,  type: 'min7', label: 'Im7'     },
+    { offset: 8,  type: 'maj7', label: 'VImaj7'  },
+    { offset: 10, type: 'maj7', label: 'VIImaj7' },
+    { offset: 0,  type: 'min9', label: 'Im9'     },
   ],
-  'Electronic': [
-    { offset: 0,  type: 'sus4', label: 'sus4'     },
-    { offset: 5,  type: 'maj7', label: 'IVmaj7'   },
-    { offset: 7,  type: 'min7', label: 'Vm7'      },
-    { offset: 10, type: 'maj7', label: 'bVIImaj7' },
+  'Miami Vice': [
+    { offset: 0,  type: 'maj7', label: 'Imaj7'   },
+    { offset: 7,  type: 'maj7', label: 'Vmaj7'   },
+    { offset: 9,  type: 'min7', label: 'VIm7'    },
+    { offset: 5,  type: 'maj7', label: 'IVmaj7'  },
   ],
-  'Modal': [
-    { offset: 0,  type: 'min7', label: 'Im7'      },
-    { offset: 5,  type: 'dom7', label: 'IV7'      },
-    { offset: 0,  type: 'min9', label: 'Im9'      },
-    { offset: 10, type: 'maj7', label: 'bVIImaj7' },
+  'Blade Runner': [
+    { offset: 0,  type: 'min7', label: 'Im7'     },
+    { offset: 1,  type: 'dom7', label: 'bII7'    },
+    { offset: 10, type: 'maj7', label: 'VIImaj7' },
+    { offset: 8,  type: 'maj7', label: 'VImaj7'  },
+  ],
+  'French House': [
+    { offset: 0,  type: 'min7', label: 'Im7'    },
+    { offset: 5,  type: 'min7', label: 'IVm7'   },
+    { offset: 8,  type: 'maj7', label: 'VImaj7' },
+    { offset: 7,  type: 'dom7', label: 'V7'     },
   ],
 };
 

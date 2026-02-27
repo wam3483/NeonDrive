@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { browser } from '$app/environment';
   import { MusicEngine, DEFAULT_CONFIG } from '$lib/music/engine';
   import { KEY_OPTIONS, PROGRESSIONS, NOTE_NAMES } from '$lib/music/theory';
 
@@ -22,6 +23,8 @@
   let drumsLevel    = $state(Math.round(DEFAULT_CONFIG.drumsLevel    * 100));
   let arpEnabled    = $state(DEFAULT_CONFIG.arpEnabled);
   let arpSpeed      = $state(DEFAULT_CONFIG.arpSpeed);
+  let seed          = $state(DEFAULT_CONFIG.seed);
+  let leadLevel     = $state(Math.round(DEFAULT_CONFIG.leadLevel * 100));
 
   // ── Derived chord label ───────────────────────────────────────────────────
   let chordLabel = $derived.by(() => {
@@ -33,7 +36,8 @@
 
   // ── Sync config to engine whenever sliders change ─────────────────────────
   $effect(() => {
-    engine?.updateConfig({
+    // Build config first so all $state reads are tracked before optional chaining
+    const cfg = {
       bpm,
       keyRoot,
       progression,
@@ -44,7 +48,10 @@
       drumsLevel:    drumsLevel    / 100,
       arpEnabled,
       arpSpeed,
-    });
+      seed,
+      leadLevel: leadLevel / 100,
+    };
+    engine?.updateConfig(cfg);
   });
 
   // ── Visualiser ────────────────────────────────────────────────────────────
@@ -92,6 +99,7 @@
   });
 
   onDestroy(() => {
+    if (!browser) return;
     engine?.stop();
     cancelAnimationFrame(rafId);
   });
@@ -216,6 +224,11 @@
         <span>Pad <em>{padLevel}%</em></span>
         <input type="range" min="0" max="100" bind:value={padLevel} />
       </label>
+
+      <label>
+        <span>Lead <em>{leadLevel}%</em></span>
+        <input type="range" min="0" max="100" bind:value={leadLevel} />
+      </label>
     </div>
 
     <!-- Arpeggio -->
@@ -238,6 +251,23 @@
             <option value={s.value}>{s.label}</option>
           {/each}
         </select>
+      </label>
+    </div>
+
+    <!-- Variation -->
+    <div class="panel">
+      <div class="panel-title">Variation</div>
+
+      <label>
+        <span>Seed <em>{seed}</em></span>
+        <input type="range" min="0" max="999" step="1" bind:value={seed} />
+      </label>
+
+      <label class="toggle-row">
+        <span>Pattern</span>
+        <button class="rand-btn" onclick={() => seed = Math.floor(Math.random() * 1000)}>
+          ↻ RANDOMIZE
+        </button>
       </label>
     </div>
 
@@ -469,6 +499,26 @@
     transition: all 120ms;
   }
   .toggle.on {
+    border-color: #40e8d8;
+    color: #40e8d8;
+    background: #40e8d815;
+    box-shadow: 0 0 8px #40e8d840;
+  }
+
+  /* ── Randomize button ── */
+  .rand-btn {
+    padding: 3px 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    border: 1px solid #2a3860;
+    border-radius: 3px;
+    background: transparent;
+    color: #405070;
+    cursor: pointer;
+    transition: all 120ms;
+  }
+  .rand-btn:hover {
     border-color: #40e8d8;
     color: #40e8d8;
     background: #40e8d815;
