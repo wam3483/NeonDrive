@@ -75,6 +75,8 @@ interface SeedData {
   leadDensity:      number;      // 0–1: controls notes-per-bar count
   leadSyncopation:  number;      // 0=on-beat preference, 1=off-beat preference
   leadOctaveChance: number;      // 0–1: probability of playing high octave
+  leadType:         string;      // oscillator/filter character for this seed
+  padType:          string;      // pad voice type for this seed
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -85,6 +87,14 @@ function lerp(a: number, b: number, t: number): number {
 
 function blendPattern(a: number[], b: number[], t: number): number[] {
   return a.map((av, i) => lerp(av, b[i], t));
+}
+
+// Shell voicing: 2 → root+7th, 3 → root+3rd+7th, 4+ → all tones
+function selectPadNotes(midis: number[], count: number): number[] {
+  if (count >= midis.length) return midis;
+  if (count === 2) return [midis[0], midis[midis.length - 1]];
+  if (count === 3) return [midis[0], midis[1], midis[midis.length - 1]];
+  return midis.slice(0, count);
 }
 
 // Xorshift32 seeded RNG — returns values in [0, 1)
@@ -125,7 +135,19 @@ export class MusicEngine {
     steps: new Array(16).fill(0)     as number[],
     notes: new Array(16).fill(0)     as number[],
     high:  new Array(16).fill(false) as boolean[],
+    type:  'saw-lp' as string,
   };
+
+  private currentPadConfig: {
+    step:        number;
+    durMult:     number;
+    velocity:    number;
+    noteCount:   number;
+    filterMult:  number;
+    extraStep:   number | null;
+    extraVel:    number;
+    type:        string;
+  } | null = null;
 
   config:    MusicConfig = { ...DEFAULT_CONFIG };
   isPlaying: boolean     = false;
@@ -306,11 +328,15 @@ export class MusicEngine {
     }
 
     // Lead style — per-bar patterns are generated live in regenLeadPattern()
-    const leadDensity      = 0.25 + rng() * 0.4;   // controls note count per bar
-    const leadSyncopation  = rng();                  // 0=on-beat, 1=off-beat
-    const leadOctaveChance = 0.1  + rng() * 0.35;  // chance of high octave
+    const leadDensity      = 0.25 + rng() * 0.4;
+    const leadSyncopation  = rng();
+    const leadOctaveChance = 0.1  + rng() * 0.35;
+    const leadTypes = ['saw-lp', 'saw-lp', 'sqr-bp', 'tri-hp', 'saw-wide'];
+    const leadType  = leadTypes[Math.floor(rng() * leadTypes.length)];
+    const padTypes  = ['dual', 'chorus', 'fifth', 'sub-shimmer'];
+    const padType   = padTypes[Math.floor(rng() * padTypes.length)];
 
-    return { hihat, openHH, fillKick, fillSnare, fillHH, leadDensity, leadSyncopation, leadOctaveChance };
+    return { hihat, openHH, fillKick, fillSnare, fillHH, leadDensity, leadSyncopation, leadOctaveChance, leadType, padType };
   }
 
   // ── Scheduler ─────────────────────────────────────────────────────────────
@@ -373,11 +399,21 @@ export class MusicEngine {
       this.playBass(time, midiToFreq(rootMidi), stepDur * 3.2, bassVel);
     }
 
-    // ── Pad: new chord on bar downbeat ─────────────────────────────────────
-    if (step === 0) {
-      const barDur = stepDur * 16;
-      const midis  = getChordMidis(keyPc, chord, 3);
-      this.playPad(time, midis.map(midiToFreq), barDur * 0.92);
+    // ── Pad ────────────────────────────────────────────────────────────────
+    if (step === 0) this.regenPadConfig(bar);
+    const pc     = this.currentPadConfig;
+    const barDur = stepDur * 16;
+
+    if (pc && step === pc.step) {
+      const midis = getChordMidis(keyPc, chord, 3);
+      const notes = selectPadNotes(midis, pc.noteCount);
+      this.playPad(time, notes.map(midiToFreq), barDur * pc.durMult, pc.velocity, pc.filterMult, pc.type);
+    }
+
+    if (pc && pc.extraStep !== null && step === pc.extraStep) {
+      const midis = getChordMidis(keyPc, chord, 3);
+      const notes = selectPadNotes(midis, Math.min(2, pc.noteCount));
+      this.playPad(time, notes.map(midiToFreq), stepDur * (16 - step) * 0.75, pc.extraVel, pc.filterMult, pc.type);
     }
 
     // ── Arpeggio ───────────────────────────────────────────────────────────
@@ -396,7 +432,7 @@ export class MusicEngine {
       const octave  = this.leadPattern.high[step] ? 5 : 4;
       const midis   = getChordMidis(keyPc, chord, octave);
       const noteIdx = this.leadPattern.notes[step] % midis.length;
-      this.playLead(time, midiToFreq(midis[noteIdx]), stepDur * 1.8, this.leadPattern.steps[step]);
+      this.playLead(time, midiToFreq(midis[noteIdx]), stepDur * 1.8, this.leadPattern.steps[step], this.leadPattern.type);
     }
   }
 
@@ -425,7 +461,63 @@ export class MusicEngine {
       high[pos]  = rng() < sd.leadOctaveChance;
     }
 
-    this.leadPattern = { steps, notes, high };
+    this.leadPattern = { steps, notes, high, type: sd.leadType };
+  }
+
+  private regenPadConfig(bar: number): void {
+    const phraseBar = bar % 4;
+    const rng       = mkRng(this.config.seed * 1013 + bar);
+
+    const padType = this.seedData.padType;
+
+    // Phrase downbeat always lands — full chord, long swell
+    if (phraseBar === 0) {
+      this.currentPadConfig = {
+        step:       0,
+        durMult:    0.92,
+        velocity:   0.85 + rng() * 0.2,
+        noteCount:  3 + Math.floor(rng() * 2),
+        filterMult: 0.7  + rng() * 0.6,
+        extraStep:  rng() < 0.3 ? 8 + Math.floor(rng() * 3) : null,
+        extraVel:   0.45 + rng() * 0.3,
+        type:       padType,
+      };
+      return;
+    }
+
+    // Fill bar: 40% chance to rest entirely
+    if (phraseBar === 3 && rng() < 0.4) {
+      this.currentPadConfig = null;
+      return;
+    }
+
+    // Other bars: 15% chance of rest
+    if (rng() < 0.15) {
+      this.currentPadConfig = null;
+      return;
+    }
+
+    // Entry step — can be anywhere on beats 1–3 (steps 0,2,4,6,8)
+    const stepPool = [0, 0, 0, 2, 2, 4, 6, 8];
+    const step     = stepPool[Math.floor(rng() * stepPool.length)];
+
+    const r       = rng();
+    const durMult = r < 0.4 ? 0.92 : r < 0.72 ? 0.5 : 0.15;
+
+    const extraStep = durMult === 0.92 && rng() < 0.3
+      ? 8 + Math.floor(rng() * 3)
+      : null;
+
+    this.currentPadConfig = {
+      step,
+      durMult,
+      velocity:   0.6  + rng() * 0.6,
+      noteCount:  2    + Math.floor(rng() * 3),
+      filterMult: 0.55 + rng() * 1.1,
+      extraStep,
+      extraVel:   0.4  + rng() * 0.35,
+      type:       padType,
+    };
   }
 
   private getCurrentChord(bar: number): ChordDef {
@@ -516,7 +608,7 @@ export class MusicEngine {
     const mix = this.config.electronicMix;
 
     const osc = ctx.createOscillator();
-    osc.type  = mix > 0.5 ? 'sawtooth' : 'sine';
+    osc.type  = mix > 0.5 ? 'sawtooth' : 'triangle';
     osc.frequency.value = freq;
 
     const filter = ctx.createBiquadFilter();
@@ -534,32 +626,72 @@ export class MusicEngine {
     osc.start(time); osc.stop(time + duration + 0.01);
   }
 
-  private playPad(time: number, freqs: number[], duration: number): void {
-    const ctx    = this.ctx!;
-    const mix    = this.config.electronicMix;
-    const attack = lerp(0.12, 0.28, mix);
+  private playPad(time: number, freqs: number[], duration: number, velMult = 1.0, filterMult = 1.0, type = 'dual'): void {
+    const ctx      = this.ctx!;
+    const mix      = this.config.electronicMix;
+    const attack   = Math.min(duration * 0.35, lerp(0.12, 0.28, mix));
+    const baseFreq = Math.max(300, lerp(1400, 3200, mix) * filterMult);
+    const oscType: OscillatorType = mix > 0.55 ? 'sawtooth' : 'triangle';
+    const relT     = Math.max(attack + 0.05, duration - 0.18);
 
-    for (const freq of freqs) {
-      for (const detune of [-6, 6]) {
-        const osc   = ctx.createOscillator();
-        osc.type    = mix > 0.55 ? 'sawtooth' : 'triangle';
-        osc.frequency.value = freq;
-        osc.detune.value    = detune;
+    const voice = (freq: number, detune: number, gainMult: number, cutoff = baseFreq) => {
+      const osc = ctx.createOscillator();
+      osc.type  = oscType;
+      osc.frequency.value = freq;
+      osc.detune.value    = detune;
 
-        const filter = ctx.createBiquadFilter();
-        filter.type  = 'lowpass';
-        filter.frequency.value = lerp(1400, 3200, mix);
-        filter.Q.value = 0.6;
+      const filt = ctx.createBiquadFilter();
+      filt.type  = 'lowpass';
+      filt.frequency.value = cutoff;
+      filt.Q.value = 0.6;
 
-        const env = ctx.createGain();
-        env.gain.setValueAtTime(0, time);
-        env.gain.linearRampToValueAtTime(0.11, time + attack);
-        env.gain.setValueAtTime(0.09, time + duration - 0.35);
-        env.gain.linearRampToValueAtTime(0, time + duration);
+      const peak = 0.11 * velMult * gainMult;
+      const env  = ctx.createGain();
+      env.gain.setValueAtTime(0, time);
+      env.gain.linearRampToValueAtTime(peak, time + attack);
+      env.gain.setValueAtTime(peak * 0.82, time + relT);
+      env.gain.linearRampToValueAtTime(0, time + duration);
 
-        osc.connect(filter); filter.connect(env); env.connect(this.padBus);
-        osc.start(time); osc.stop(time + duration + 0.05);
-      }
+      osc.connect(filt); filt.connect(env); env.connect(this.padBus);
+      osc.start(time); osc.stop(time + duration + 0.05);
+    };
+
+    if (type === 'chorus') {
+      // Four voices at wide spread — obvious beating and shimmer
+      for (const freq of freqs)
+        for (const d of [-28, -8, 8, 28]) voice(freq, d, 0.6);
+
+    } else if (type === 'fifth') {
+      // Chord + perfect fifth on the root at equal weight — open, hollow
+      const FIFTH = Math.pow(2, 7 / 12);
+      for (const freq of freqs)        voice(freq,             0, 1.0);
+      for (const d of [-6, 6])         voice(freqs[0] * FIFTH, d, 0.9, baseFreq * 1.4);
+
+    } else if (type === 'sub-shimmer') {
+      // Shimmer: chord voices at a bright open filter
+      for (const freq of freqs)
+        for (const d of [-6, 6]) voice(freq, d, 0.85, Math.min(8000, baseFreq * 2.8));
+
+      // Sub: sine on root one octave down, heavy lowpass, prominent gain
+      const sub = ctx.createOscillator();
+      sub.type  = 'sine';
+      sub.frequency.value = freqs[0] / 2;
+      const subFilt = ctx.createBiquadFilter();
+      subFilt.type  = 'lowpass';
+      subFilt.frequency.value = 220;
+      const subEnv  = ctx.createGain();
+      const subPeak = 0.22 * velMult;
+      subEnv.gain.setValueAtTime(0, time);
+      subEnv.gain.linearRampToValueAtTime(subPeak, time + attack * 1.5);
+      subEnv.gain.setValueAtTime(subPeak * 0.85, time + relT);
+      subEnv.gain.linearRampToValueAtTime(0, time + duration);
+      sub.connect(subFilt); subFilt.connect(subEnv); subEnv.connect(this.padBus);
+      sub.start(time); sub.stop(time + duration + 0.05);
+
+    } else {
+      // 'dual' — two voices ±6¢, the default
+      for (const freq of freqs)
+        for (const d of [-6, 6]) voice(freq, d, 1.0);
     }
   }
 
@@ -583,20 +715,37 @@ export class MusicEngine {
     osc.start(time); osc.stop(time + duration + 0.01);
   }
 
-  private playLead(time: number, freq: number, duration: number, vel: number): void {
+  private playLead(time: number, freq: number, duration: number, vel: number, type = 'saw-lp'): void {
     const ctx = this.ctx!;
     const mix = this.config.electronicMix;
 
-    for (const detune of [-8, 8]) {
+    type LeadSpec = {
+      detunes:    number[];
+      oscType:    OscillatorType;
+      filterType: BiquadFilterType;
+      filterFreq: number;
+      filterQ:    number;
+    };
+
+    const specs: Record<string, LeadSpec> = {
+      'saw-lp':   { detunes: [-8,  8],  oscType: 'sawtooth', filterType: 'lowpass',  filterFreq: lerp(1800, 4500, mix), filterQ: 1.2 },
+      'sqr-bp':   { detunes: [0],       oscType: 'square',   filterType: 'bandpass', filterFreq: lerp(800,  2400, mix), filterQ: lerp(9.0, 14.0, mix) },
+      'tri-hp':   { detunes: [-14, 14], oscType: 'triangle', filterType: 'highpass', filterFreq: lerp(1200, 3000, mix), filterQ: lerp(1.2, 2.2, mix) },
+      'saw-wide': { detunes: [-52, 52], oscType: 'sawtooth', filterType: 'lowpass',  filterFreq: lerp(2200, 5500, mix), filterQ: 0.7 },
+    };
+
+    const spec = specs[type] ?? specs['saw-lp'];
+
+    for (const detune of spec.detunes) {
       const osc = ctx.createOscillator();
-      osc.type  = 'sawtooth';
+      osc.type  = spec.oscType;
       osc.frequency.value = freq;
       osc.detune.value    = detune;
 
       const filter = ctx.createBiquadFilter();
-      filter.type  = 'lowpass';
-      filter.frequency.value = lerp(1800, 4500, mix);
-      filter.Q.value = 1.2;
+      filter.type  = spec.filterType;
+      filter.frequency.value = spec.filterFreq;
+      filter.Q.value = spec.filterQ;
 
       const env = ctx.createGain();
       env.gain.setValueAtTime(0, time);

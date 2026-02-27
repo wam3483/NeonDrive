@@ -70,6 +70,12 @@ export const PROGRESSIONS: Record<string, ChordDef[]> = {
     { offset: 8,  type: 'maj7', label: 'VImaj7' },
     { offset: 7,  type: 'dom7', label: 'V7'     },
   ],
+  'Around the World': [
+    { offset: 0,  type: 'min7', label: 'Im7'     },
+    { offset: 10, type: 'dom7', label: 'bVII7'   },
+    { offset: 8,  type: 'maj7', label: 'bVImaj7' },
+    { offset: 7,  type: 'dom7', label: 'V7'      },
+  ],
 };
 
 /**
