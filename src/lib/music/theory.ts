@@ -58,7 +58,7 @@ export const PROGRESSIONS: Record<string, ChordDef[]> = {
     { offset: 9,  type: 'min7', label: 'VIm7'    },
     { offset: 5,  type: 'maj7', label: 'IVmaj7'  },
   ],
-  'Blade Runner': [
+  '(Anxiety) Blade Runner': [
     { offset: 0,  type: 'min7', label: 'Im7'     },
     { offset: 1,  type: 'dom7', label: 'bII7'    },
     { offset: 10, type: 'maj7', label: 'VIImaj7' },

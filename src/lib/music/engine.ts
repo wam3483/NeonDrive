@@ -331,9 +331,9 @@ export class MusicEngine {
     const leadDensity      = 0.25 + rng() * 0.4;
     const leadSyncopation  = rng();
     const leadOctaveChance = 0.1  + rng() * 0.35;
-    const leadTypes = ['saw-lp', 'saw-lp', 'sqr-bp', 'tri-hp', 'saw-wide'];
+    const leadTypes = ['saw-lp', 'saw-lp', 'tri-lp', 'pluck'];
     const leadType  = leadTypes[Math.floor(rng() * leadTypes.length)];
-    const padTypes  = ['dual', 'chorus', 'fifth', 'sub-shimmer'];
+    const padTypes  = ['dual', 'chorus', 'fifths', 'fifths', 'sub-shimmer'];
     const padType   = padTypes[Math.floor(rng() * padTypes.length)];
 
     return { hihat, openHH, fillKick, fillSnare, fillHH, leadDensity, leadSyncopation, leadOctaveChance, leadType, padType };
@@ -432,7 +432,9 @@ export class MusicEngine {
       const octave  = this.leadPattern.high[step] ? 5 : 4;
       const midis   = getChordMidis(keyPc, chord, octave);
       const noteIdx = this.leadPattern.notes[step] % midis.length;
-      this.playLead(time, midiToFreq(midis[noteIdx]), stepDur * 1.8, this.leadPattern.steps[step], this.leadPattern.type);
+      // Cap duration so the note never spills past the bar boundary
+      const dur     = Math.min(stepDur * 1.8, stepDur * (16 - step) - 0.01);
+      this.playLead(time, midiToFreq(midis[noteIdx]), dur, this.leadPattern.steps[step], this.leadPattern.type);
     }
   }
 
@@ -471,53 +473,55 @@ export class MusicEngine {
     const padType = this.seedData.padType;
 
     // Phrase downbeat always lands — full chord, long swell
-    if (phraseBar === 0) {
+  //  if (phraseBar === 0) {
       this.currentPadConfig = {
         step:       0,
         durMult:    0.92,
         velocity:   0.85 + rng() * 0.2,
-        noteCount:  3 + Math.floor(rng() * 2),
+        noteCount:  4,//+ Math.floor(rng() * 2),
         filterMult: 0.7  + rng() * 0.6,
         extraStep:  rng() < 0.3 ? 8 + Math.floor(rng() * 3) : null,
         extraVel:   0.45 + rng() * 0.3,
         type:       padType,
       };
       return;
-    }
+//    }
 
+      this.currentPadConfig = null;
+      return;
     // Fill bar: 40% chance to rest entirely
-    if (phraseBar === 3 && rng() < 0.4) {
-      this.currentPadConfig = null;
-      return;
-    }
+    // if (phraseBar === 3 && rng() < -1) {
+    //   this.currentPadConfig = null;
+    //   return;
+    // }
 
-    // Other bars: 15% chance of rest
-    if (rng() < 0.15) {
-      this.currentPadConfig = null;
-      return;
-    }
+    // // Other bars: 15% chance of rest
+    // if (rng() < 0.15) {
+    //   this.currentPadConfig = null;
+    //   return;
+    // }
 
-    // Entry step — can be anywhere on beats 1–3 (steps 0,2,4,6,8)
-    const stepPool = [0, 0, 0, 2, 2, 4, 6, 8];
-    const step     = stepPool[Math.floor(rng() * stepPool.length)];
+    // // Entry step — can be anywhere on beats 1–3 (steps 0,2,4,6,8)
+    // const stepPool = [0, 0, 0, 2, 2, 4, 6, 8];
+    // const step     = stepPool[Math.floor(rng() * stepPool.length)];
 
-    const r       = rng();
-    const durMult = r < 0.4 ? 0.92 : r < 0.72 ? 0.5 : 0.15;
+    // const r       = rng();
+    // const durMult = r < 0.4 ? 0.92 : r < 0.72 ? 0.5 : 0.15;
 
-    const extraStep = durMult === 0.92 && rng() < 0.3
-      ? 8 + Math.floor(rng() * 3)
-      : null;
+    // const extraStep = durMult === 0.92 && rng() < 0.3
+    //   ? 8 + Math.floor(rng() * 3)
+    //   : null;
 
-    this.currentPadConfig = {
-      step,
-      durMult,
-      velocity:   0.6  + rng() * 0.6,
-      noteCount:  2    + Math.floor(rng() * 3),
-      filterMult: 0.55 + rng() * 1.1,
-      extraStep,
-      extraVel:   0.4  + rng() * 0.35,
-      type:       padType,
-    };
+    // this.currentPadConfig = {
+    //   step,
+    //   durMult,
+    //   velocity:   0.6  + rng() * 0.6, // slightly higher velocity range for non-downbeat entries
+    //   noteCount:  4   ,//+ Math.floor(rng() * 3),
+    //   filterMult: 0.55 + rng() * 1.1, // wider filter range for non-downbeat entries
+    //   extraStep,
+    //   extraVel:   0.4  + rng() * 0.35, // velocity for extra chord hit when durMult=0.92
+    //   type:       padType,
+    // };
   }
 
   private getCurrentChord(bar: number): ChordDef {
@@ -667,6 +671,16 @@ export class MusicEngine {
       for (const freq of freqs)        voice(freq,             0, 1.0);
       for (const d of [-6, 6])         voice(freqs[0] * FIFTH, d, 0.9, baseFreq * 1.4);
 
+    } else if (type === 'fifths') {
+      // Every chord tone paired with its perfect fifth — wide, orchestral
+      const FIFTH = Math.pow(2, 7 / 12);
+      for (const freq of freqs) {
+        for (const d of [-6, 6]) {
+          voice(freq,         d,   1.0);
+          voice(freq * FIFTH, d,   0.8);
+        }
+      }
+
     } else if (type === 'sub-shimmer') {
       // Shimmer: chord voices at a bright open filter
       for (const freq of freqs)
@@ -687,6 +701,37 @@ export class MusicEngine {
       subEnv.gain.linearRampToValueAtTime(0, time + duration);
       sub.connect(subFilt); subFilt.connect(subEnv); subEnv.connect(this.padBus);
       sub.start(time); sub.stop(time + duration + 0.05);
+
+    } else if (type === 'deep-sine') {
+      // One octave down: pure sine + detuned sine at 50% amplitude
+      for (const freq of freqs) {
+        const f = freq / 2;
+
+        const o1 = ctx.createOscillator();
+        o1.type = 'sawtooth';
+        o1.frequency.value = f;
+        const e1 = ctx.createGain();
+        const p1 = 0.18 * velMult;
+        e1.gain.setValueAtTime(0, time);
+        e1.gain.linearRampToValueAtTime(p1, time + attack);
+        e1.gain.setValueAtTime(p1 * 0.82, time + relT);
+        e1.gain.linearRampToValueAtTime(0, time + duration);
+        o1.connect(e1); e1.connect(this.padBus);
+        o1.start(time); o1.stop(time + duration + 0.05);
+
+        const o2 = ctx.createOscillator();
+        o2.type = 'sawtooth';
+        o2.frequency.value = f;
+        o2.detune.value = 50;
+        const e2 = ctx.createGain();
+        const p2 = p1;
+        e2.gain.setValueAtTime(0, time);
+        e2.gain.linearRampToValueAtTime(p2, time + attack);
+        e2.gain.setValueAtTime(p2 * 0.82, time + relT);
+        e2.gain.linearRampToValueAtTime(0, time + duration);
+        o2.connect(e2); e2.connect(this.padBus);
+        o2.start(time); o2.stop(time + duration + 0.05);
+      }
 
     } else {
       // 'dual' — two voices ±6¢, the default
@@ -729,10 +774,31 @@ export class MusicEngine {
 
     const specs: Record<string, LeadSpec> = {
       'saw-lp':   { detunes: [-8,  8],  oscType: 'sawtooth', filterType: 'lowpass',  filterFreq: lerp(1800, 4500, mix), filterQ: 1.2 },
-      'sqr-bp':   { detunes: [0],       oscType: 'square',   filterType: 'bandpass', filterFreq: lerp(800,  2400, mix), filterQ: lerp(9.0, 14.0, mix) },
-      'tri-hp':   { detunes: [-14, 14], oscType: 'triangle', filterType: 'highpass', filterFreq: lerp(1200, 3000, mix), filterQ: lerp(1.2, 2.2, mix) },
-      'saw-wide': { detunes: [-52, 52], oscType: 'sawtooth', filterType: 'lowpass',  filterFreq: lerp(2200, 5500, mix), filterQ: 0.7 },
+      'tri-lp':   { detunes: [-10, 10], oscType: 'triangle', filterType: 'lowpass',  filterFreq: lerp(1600, 4000, mix), filterQ: 0.8 },
     };
+
+    if (type === 'pluck') {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq;
+
+      // Filter envelope: open bright, snap shut
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.Q.value = 2.5;
+      filter.frequency.setValueAtTime(lerp(4000, 9000, mix), time);
+      filter.frequency.exponentialRampToValueAtTime(lerp(300, 700, mix), time + 0.18);
+
+      // Amplitude: instant spike, fast decay to near-silence
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(vel * 0.7, time);
+      env.gain.exponentialRampToValueAtTime(vel * 0.04, time + 0.12);
+      env.gain.exponentialRampToValueAtTime(0.001, time + duration);
+
+      osc.connect(filter); filter.connect(env); env.connect(this.leadBus);
+      osc.start(time); osc.stop(time + duration + 0.01);
+      return;
+    }
 
     const spec = specs[type] ?? specs['saw-lp'];
 
