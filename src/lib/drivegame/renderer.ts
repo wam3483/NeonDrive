@@ -1,81 +1,183 @@
 import { Graphics } from 'pixi.js';
 import { SunsetRenderer } from '$lib/sunset';
-import type { PaletteConfig } from '$lib/sunset';
+import type { PaletteConfig, RoadRenderContext } from '$lib/sunset';
 
 export type CarStyle = 'classic' | 'sport';
 
+// ---------------------------------------------------------------------------
+// Closed-loop track definition
+// ---------------------------------------------------------------------------
+interface TrackPt { x: number; y: number; }
+
+/**
+ * Generate a smooth closed-loop track in an arbitrary world-space coordinate
+ * system (units don't matter — only ratios/angles are used for curvature).
+ * Multi-frequency polar oval so there's a healthy variety of curves.
+ */
+function generateTrack(N = 300): TrackPt[] {
+  const pts: TrackPt[] = [];
+  for (let i = 0; i < N; i++) {
+    const t = (i / N) * Math.PI * 2;
+    const r = 1 + 0.25 * Math.sin(t * 2.5) + 0.12 * Math.sin(t * 6 + 0.8);
+    pts.push({ x: Math.cos(t) * 400 * r, y: Math.sin(t) * 240 * r });
+  }
+  return pts;
+}
+
+// ---------------------------------------------------------------------------
+// DriveGameRenderer
+// ---------------------------------------------------------------------------
 export class DriveGameRenderer extends SunsetRenderer {
-  // Car state
-  private carLaneX = 0;    // -1 (left edge) to +1 (right edge)
-  private carDepth = 0.82; // 0 = horizon, 1 = bottom of screen
+  // ── car visual state ──────────────────────────────────────────────────────
+  private carDepth = 0.82;    // 0 = horizon, 1 = bottom; kept fixed for Out Run feel
   private carStyle: CarStyle = 'classic';
 
-  // Input tracking
-  private keysDown = new Set<string>();
-  private onKeyDown = (e: KeyboardEvent) => {
-    this.keysDown.add(e.key.toLowerCase());
-  };
-  private onKeyUp = (e: KeyboardEvent) => {
-    this.keysDown.delete(e.key.toLowerCase());
-  };
+  // ── track & steering state ────────────────────────────────────────────────
+  private trackPoints: TrackPt[] = [];
+  /** Fractional index into trackPoints (wraps 0 … N). */
+  private trackT = 0;
+  /** Car's lateral position across the road. -1 = left edge, +1 = right edge. */
+  private lateralOffset = 0;
+  /** Smoothed screen-pixel shift of the vanishing point (positive = curve right). */
+  private curveOffset = 0;
+  /** Visual lean for steering feedback (-1 … +1). */
+  private carLean = 0;
 
+  // ── input ─────────────────────────────────────────────────────────────────
+  private keysDown = new Set<string>();
+  private onKeyDown = (e: KeyboardEvent) => { this.keysDown.add(e.key.toLowerCase()); };
+  private onKeyUp   = (e: KeyboardEvent) => { this.keysDown.delete(e.key.toLowerCase()); };
+
+  // ── public API ─────────────────────────────────────────────────────────────
   setCarStyle(style: CarStyle): void {
     this.carStyle = style;
     const g = this.findByLabel('car');
-    if (g) {
-      g.clear();
-      this.renderCarGraphics(g);
-    }
+    if (g) { g.clear(); this.renderCarGraphics(g); }
   }
 
   async init(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await super.init(canvas, width, height);
+    this.trackPoints = generateTrack();
     window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('keyup',   this.onKeyUp);
   }
 
   destroy(): void {
     window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('keyup',   this.onKeyUp);
     super.destroy();
   }
 
-  protected render(): void {
+  // ── overrides ─────────────────────────────────────────────────────────────
+  protected override render(): void {
     super.render();
     this.drawCar();
   }
 
-  protected animate(ticker: { deltaTime: number }): void {
+  protected override animate(ticker: { deltaTime: number }): void {
     super.animate(ticker);
     this.processInput(ticker.deltaTime);
     this.updateCar();
   }
 
-  private processInput(dt: number): void {
-    const speed = 0.025 * dt;
-
-    if (this.keysDown.has('a') || this.keysDown.has('arrowleft'))  this.carLaneX -= speed;
-    if (this.keysDown.has('d') || this.keysDown.has('arrowright')) this.carLaneX += speed;
-    if (this.keysDown.has('w') || this.keysDown.has('arrowup'))   this.carDepth -= speed * 0.5;
-    if (this.keysDown.has('s') || this.keysDown.has('arrowdown')) this.carDepth += speed * 0.5;
-
-    this.carLaneX = Math.max(-0.85, Math.min(0.85, this.carLaneX));
-    this.carDepth = Math.max(0.15, Math.min(0.95, this.carDepth));
+  /**
+   * Override buildRoadCtx so that both drawRoad() and updateRoad() in the
+   * base class automatically receive the live curveOffset via polymorphism.
+   */
+  protected override buildRoadCtx(horizonY: number, palette: PaletteConfig): RoadRenderContext {
+    return { ...super.buildRoadCtx(horizonY, palette), curveOffset: this.curveOffset };
   }
 
+  // ── track helpers ──────────────────────────────────────────────────────────
+  /**
+   * Normalised forward tangent at fractional track position t.
+   * Uses a 2-step central difference for smoothness.
+   */
+  private getTrackTangent(t: number): { dx: number; dy: number } {
+    const N  = this.trackPoints.length;
+    const i0 = ((Math.floor(t) - 1 + N) % N);
+    const i2 = ((Math.floor(t) + 1) % N);
+    const p0 = this.trackPoints[i0];
+    const p2 = this.trackPoints[i2];
+    const dx = p2.x - p0.x;
+    const dy = p2.y - p0.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    return { dx: dx / len, dy: dy / len };
+  }
+
+  /**
+   * Look ahead on the track and compute the signed curvature as a
+   * screen-pixel vanishing-point offset.
+   *
+   * Convention (screen coords, y-down):
+   *   positive cross product  →  clockwise turn  →  curve right  →  curveOffset > 0
+   *   negative cross product  →  counter-clockwise →  curve left  →  curveOffset < 0
+   */
+  private computeTargetCurveOffset(): number {
+    const N = this.trackPoints.length;
+    if (N < 4) return 0;
+    const lookAhead = Math.max(4, Math.floor(N * 0.08));
+    const tang0 = this.getTrackTangent(this.trackT);
+    const tang1 = this.getTrackTangent((this.trackT + lookAhead) % N);
+    const cross  = tang0.dx * tang1.dy - tang0.dy * tang1.dx;
+    return Math.max(-280, Math.min(280, cross * 380));
+  }
+
+  // ── per-frame update ───────────────────────────────────────────────────────
+  private processInput(dt: number): void {
+    const N          = this.trackPoints.length;
+    const baseSpeed  = 0.4 * dt;   // track points per tick at 60 fps
+    const turnSpeed  = 0.022 * dt;
+
+    // W/S adjust track advance speed; default is always moving forward
+    const speedMult =
+      (this.keysDown.has('w') || this.keysDown.has('arrowup'))   ? 2.0 :
+      (this.keysDown.has('s') || this.keysDown.has('arrowdown')) ? 0.2 : 1.0;
+
+    this.trackT += baseSpeed * speedMult;
+    this.trackT  = ((this.trackT % N) + N) % N;   // loop around
+
+    // A/D: lateral steering
+    const turnInput =
+      (this.keysDown.has('a') || this.keysDown.has('arrowleft'))  ? -1 :
+      (this.keysDown.has('d') || this.keysDown.has('arrowright')) ? +1 : 0;
+
+    this.lateralOffset += turnInput * turnSpeed;
+    this.lateralOffset  = Math.max(-0.85, Math.min(0.85, this.lateralOffset));
+
+    // Gentle drift toward centre when not steering
+    if (turnInput === 0) this.lateralOffset *= Math.pow(0.97, dt);
+
+    // Road centrifugal drift: subtle outward push during curves
+    const driftRate = (this.curveOffset / (this.width * 20)) * dt;
+    this.lateralOffset = Math.max(-0.85, Math.min(0.85, this.lateralOffset + driftRate));
+
+    // Smooth curve offset toward target (eased over ~25 frames)
+    const target = this.computeTargetCurveOffset();
+    this.curveOffset += (target - this.curveOffset) * Math.min(1, 0.04 * dt);
+
+    // Visual lean follows steering (eased over ~10 frames)
+    this.carLean += (turnInput - this.carLean) * Math.min(1, 0.12 * dt);
+  }
+
+  // ── car screen position ────────────────────────────────────────────────────
   private getCarScreenPos(): { x: number; y: number; scale: number } {
     const horizonY = this.height * 0.55;
     const groundH  = this.height - horizonY;
     const cx       = this.width / 2;
     const spread   = this.width * 1.5;
 
-    const screenY = horizonY + this.carDepth * groundH;
-    const screenX = cx + this.carLaneX * this.carDepth * (spread / 2);
-    const scale   = this.carDepth;
+    const screenY             = horizonY + this.carDepth * groundH;
+    // Lateral offset maps to road half-width at the car's depth, same
+    // perspective as the road renderer so the car sits naturally on the road.
+    const roadHalfAtDepth     = this.carDepth * (spread / 2);
+    const screenX             = cx + this.lateralOffset * roadHalfAtDepth * 0.6;
+    const scale               = this.carDepth;
 
     return { x: screenX, y: screenY, scale };
   }
 
+  // ── car drawing ────────────────────────────────────────────────────────────
   private drawCar(): void {
     const g = new Graphics();
     g.label = 'car';
@@ -452,13 +554,11 @@ export class DriveGameRenderer extends SunsetRenderer {
     g.stroke({ width: 1.2 * s, color: 0x2a3c60, alpha: 0.55 });
 
     // -----------------------------------------------------------------------
-    // Wide horizontal rear grille/vent panel — spans most of body width
-    // Sits in upper portion of body, between the taillight clusters
+    // Wide horizontal rear grille/vent panel
     // -----------------------------------------------------------------------
     const tailR     = 10 * s;
     const tailGap   = 6 * s;
     const tailInset = 10 * s;
-    // cluster width = tailR + tailGap + tailR (two lights side by side)
     const clusterW  = tailR * 2 + tailGap + tailR * 2;
 
     const ventL   = bodyLeft + tailInset + clusterW + 8 * s;
@@ -471,7 +571,6 @@ export class DriveGameRenderer extends SunsetRenderer {
       g.rect(ventL, ventTop, ventW, ventH);
       g.fill(0x08090e);
 
-      // Horizontal louvre slats
       const numSlats = 9;
       const slatH    = ventH / numSlats;
       for (let i = 0; i < numSlats; i++) {
@@ -489,14 +588,12 @@ export class DriveGameRenderer extends SunsetRenderer {
     }
 
     // -----------------------------------------------------------------------
-    // Four circular taillights — two left cluster, two right cluster
+    // Four circular taillights
     // -----------------------------------------------------------------------
     const tailY = bodyTop + 20 * s;
 
-    // Left cluster (left light outermost, right light toward center)
     const tL1 = bodyLeft + tailInset + tailR;
     const tL2 = tL1 + tailR + tailGap + tailR;
-    // Right cluster (mirror)
     const tR1 = bodyLeft + w - tailInset - tailR;
     const tR2 = tR1 - (tailR + tailGap + tailR);
 
@@ -506,7 +603,7 @@ export class DriveGameRenderer extends SunsetRenderer {
     this.drawCircleTaillight(g, tR1, tailY, tailR, s, palette);
 
     // -----------------------------------------------------------------------
-    // Lower bumper strip (dark horizontal band above diffuser)
+    // Lower bumper strip
     // -----------------------------------------------------------------------
     const stripTop = bodyTop + bodyH * 0.72;
     const stripH   = diffTop - stripTop;
@@ -569,7 +666,7 @@ export class DriveGameRenderer extends SunsetRenderer {
     }
 
     // -----------------------------------------------------------------------
-    // Rear engine cover / windshield area — louvered slats behind roofline
+    // Rear engine cover / windshield louvered slats
     // -----------------------------------------------------------------------
     const winBotInset = cabInset + 12 * s;
     const winTopInset = cabTopInset + 12 * s;

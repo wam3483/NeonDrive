@@ -861,7 +861,7 @@ export class SunsetRenderer {
     this.container.addChild(g);
   }
 
-  private buildRoadCtx(horizonY: number, palette: PaletteConfig): RoadRenderContext {
+  protected buildRoadCtx(horizonY: number, palette: PaletteConfig): RoadRenderContext {
     return {
       horizonY,
       width:         this.width,
