@@ -19,7 +19,7 @@
       showStars: true,
       showMountains: true,
       showClouds: true,
-      showTrees: true,
+      showTrees: false,
       sunStripes: true,
       starDensity: 300,
       roadStyle: 'road',

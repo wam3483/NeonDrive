@@ -1,8 +1,21 @@
 import { Graphics } from 'pixi.js';
 import { SunsetRenderer } from '$lib/sunset';
 import type { PaletteConfig, RoadRenderContext } from '$lib/sunset';
+import { Random } from '$lib/map/random';
 
 export type CarStyle = 'classic' | 'sport';
+
+// ---------------------------------------------------------------------------
+// Roadside scenery
+// ---------------------------------------------------------------------------
+interface RoadsideSprite {
+  type: 'palm' | 'billboard' | 'rock';
+  side: -1 | 1;
+  z: number;          // 0–1 loop phase (position along the scroll cycle)
+  extraFrac: number;  // lateral offset beyond guard rail, in halfBottom units
+  scaleVar: number;   // random scale multiplier
+  seed: number;       // for deterministic shape generation
+}
 
 // ---------------------------------------------------------------------------
 // Closed-loop track definition
@@ -32,6 +45,9 @@ export class DriveGameRenderer extends SunsetRenderer {
   private carDepth = 0.82;    // 0 = horizon, 1 = bottom; kept fixed for Out Run feel
   private carStyle: CarStyle = 'classic';
 
+  // ── roadside scenery ──────────────────────────────────────────────────────
+  private roadsideSprites: RoadsideSprite[] = [];
+
   // ── track & steering state ────────────────────────────────────────────────
   private trackPoints: TrackPt[] = [];
   /** Fractional index into trackPoints (wraps 0 … N). */
@@ -58,6 +74,7 @@ export class DriveGameRenderer extends SunsetRenderer {
   async init(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await super.init(canvas, width, height);
     this.trackPoints = generateTrack();
+    this.generateRoadsideSprites();
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup',   this.onKeyUp);
   }
@@ -71,12 +88,14 @@ export class DriveGameRenderer extends SunsetRenderer {
   // ── overrides ─────────────────────────────────────────────────────────────
   protected override render(): void {
     super.render();
+    this.drawRoadsideSprites();
     this.drawCar();
   }
 
   protected override animate(ticker: { deltaTime: number }): void {
     super.animate(ticker);
     this.processInput(ticker.deltaTime);
+    this.updateRoadsideSprites();
     this.updateCar();
   }
 
@@ -793,5 +812,370 @@ export class DriveGameRenderer extends SunsetRenderer {
     // Outer glow ring
     g.circle(cx, cy, r);
     g.stroke({ width: 1 * s, color: 0xff6070, alpha: 0.5 });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Roadside scenery generation & rendering
+  // ---------------------------------------------------------------------------
+
+  private generateRoadsideSprites(): void {
+    const rng = new Random(9876);
+    const N   = 52;
+    const typePool: Array<RoadsideSprite['type']> = [
+      'palm', 'palm', 'palm', 'palm',
+      'billboard', 'billboard', 'billboard',
+      'rock', 'rock', 'rock', 'rock',
+    ];
+
+    this.roadsideSprites = [];
+    for (let i = 0; i < N; i++) {
+      const side = rng.float(0, 1) < 0.5 ? -1 : 1;
+      this.roadsideSprites.push({
+        type:      typePool[rng.int(0, typePool.length - 1)],
+        side:      side as -1 | 1,
+        z:         i / N,
+        extraFrac: rng.float(0.08, 0.36),  // lateral offset beyond guard rail
+        scaleVar:  rng.float(0.75, 1.30),
+        seed:      rng.int(0, 9999),
+      });
+    }
+  }
+
+  /**
+   * Replicate the road's perspective curve helper so objects align with the
+   * road when the car is going around a bend.
+   */
+  private roadCenterX(perspT: number): number {
+    const cx         = this.width / 2;
+    const curvePower = this.curveOffset / 12;
+    const t          = Math.max(0.04, perspT);
+    return cx + curvePower * (1 / t - 1);
+  }
+
+  private drawRoadsideSprites(): void {
+    const g = new Graphics();
+    g.label = 'roadside';
+    this.renderRoadsideSpriteGraphics(g);
+    this.container.addChild(g);
+  }
+
+  private updateRoadsideSprites(): void {
+    const g = this.findByLabel('roadside');
+    if (!g) return;
+    g.clear();
+    this.renderRoadsideSpriteGraphics(g);
+  }
+
+  private renderRoadsideSpriteGraphics(g: Graphics): void {
+    const horizonY   = this.height * 0.55;
+    const groundH    = this.height - horizonY;
+    const halfBot    = this.width * 0.75;
+    const railFrac   = 0.85 / 0.75;   // matches RealisticRoadRenderer
+    const MIN_T      = 0.04;
+    const palette    = this.getActivePalette();
+    const scroll     = (this.animationTime * 0.3) % 1.0;
+
+    // Resolve each sprite to a screen position, then sort far→near
+    type Placed = { sprite: RoadsideSprite; perspT: number; x: number; y: number };
+    const visible: Placed[] = [];
+
+    for (const sprite of this.roadsideSprites) {
+      const rawT  = ((sprite.z + scroll) % 1.0);
+      const t     = rawT * rawT;   // quadratic — same distribution as road lines
+      if (t < MIN_T || t > 0.96) continue;
+
+      const perspT = t;
+      const y      = horizonY + perspT * groundH;
+      const cx     = this.roadCenterX(perspT);
+      const x      = cx + sprite.side * (railFrac + sprite.extraFrac) * perspT * halfBot;
+
+      // Cull objects that have scrolled too far off-screen laterally
+      if (x < -120 || x > this.width + 120) continue;
+
+      visible.push({ sprite, perspT, x, y });
+    }
+
+    // Painter's order: far first
+    visible.sort((a, b) => a.perspT - b.perspT);
+
+    for (const { sprite, perspT, x, y } of visible) {
+      const scale = perspT * sprite.scaleVar;
+      switch (sprite.type) {
+        case 'palm':      this.drawRoadsidePalm(g, x, y, scale, sprite.seed, palette);      break;
+        case 'billboard': this.drawRoadsideBillboard(g, x, y, scale, sprite.seed, palette); break;
+        case 'rock':      this.drawRoadsideRock(g, x, y, scale, sprite.seed, palette);      break;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Palm tree — clean tropical silhouette with curved trunk & drooping fronds
+  // ---------------------------------------------------------------------------
+  private drawRoadsidePalm(
+    g: Graphics, x: number, baseY: number, scale: number, seed: number,
+    _palette: PaletteConfig,
+  ): void {
+    const rng    = new Random(seed);
+    const trunkH = 700 * scale;
+    const col    = 0x0a0816;   // near-black silhouette
+
+    // ── Trunk: gentle S-curve via cubic bezier, wider at base ───────────────
+    // Pick a lean direction and a slight mid-bulge for organic feel
+    const lean    = rng.float(-0.6, 0.6) * 80 * scale;
+    const midBow  = rng.float(-0.4, 0.4) * 40 * scale;
+
+    // Bezier control points for the trunk centerline
+    const bx0 = x;
+    const by0 = baseY;
+    const bx1 = x + midBow;
+    const by1 = baseY - trunkH * 0.35;
+    const bx2 = x + lean * 0.7 + midBow * 0.3;
+    const by2 = baseY - trunkH * 0.7;
+    const bx3 = x + lean;
+    const by3 = baseY - trunkH;
+
+    // Sample the cubic bezier to draw a tapered trunk as filled polygon
+    const trunkSteps = 16;
+    const baseW = Math.max(2, 22 * scale);
+    const topW  = Math.max(1, 6 * scale);
+    const leftPts: number[] = [];
+    const rightPts: number[] = [];
+
+    for (let i = 0; i <= trunkSteps; i++) {
+      const t  = i / trunkSteps;
+      const mt = 1 - t;
+      // Cubic bezier
+      const cx = mt*mt*mt*bx0 + 3*mt*mt*t*bx1 + 3*mt*t*t*bx2 + t*t*t*bx3;
+      const cy = mt*mt*mt*by0 + 3*mt*mt*t*by1 + 3*mt*t*t*by2 + t*t*t*by3;
+      // Tangent for perpendicular offset
+      const tx = -3*mt*mt*bx0 + 3*(mt*mt - 2*mt*t)*bx1 + 3*(2*mt*t - t*t)*bx2 + 3*t*t*bx3;
+      const ty = -3*mt*mt*by0 + 3*(mt*mt - 2*mt*t)*by1 + 3*(2*mt*t - t*t)*by2 + 3*t*t*by3;
+      const tLen = Math.sqrt(tx*tx + ty*ty) || 1;
+      const nx = -ty / tLen;
+      const ny =  tx / tLen;
+      // Taper: wide at base (t=0), narrow at top (t=1)
+      const halfW = baseW + (topW - baseW) * t;
+      leftPts.push(cx + nx * halfW, cy + ny * halfW);
+      rightPts.push(cx - nx * halfW, cy - ny * halfW);
+    }
+
+    // Reverse rightPts by coordinate pairs (not flat array) so polygon winds correctly
+    const rightReversed: number[] = [];
+    for (let i = rightPts.length - 2; i >= 0; i -= 2) {
+      rightReversed.push(rightPts[i], rightPts[i + 1]);
+    }
+
+    // Draw trunk as closed polygon (left side up, right side down)
+    const pts: number[] = [...leftPts, ...rightReversed];
+    g.poly(pts);
+    g.fill(col);
+
+    // Crown point
+    const crownX = bx3;
+    const crownY = by3;
+
+    // ── Fronds: 7–10 long arcing fronds with leaflets ───────────────────────
+    const frondCount = 7 + rng.int(0, 3);
+
+    for (let i = 0; i < frondCount; i++) {
+      // Distribute fronds in a full arc above the crown (~300° spread)
+      // with some randomness so they look natural
+      const baseAngle = -Math.PI * 0.92 + (i / (frondCount - 1)) * Math.PI * 1.84;
+      const angle = baseAngle + rng.float(-0.15, 0.15);
+
+      // Frond length varies
+      const frondLen = (200 + rng.float(-40, 60)) * scale;
+
+      // Each frond is a quadratic bezier spine that droops heavily
+      const droopAmount = (0.55 + rng.float(0, 0.25)) * frondLen;
+
+      // Spine control point: starts outward at `angle`, then droops down
+      const spCpX = crownX + Math.cos(angle) * frondLen * 0.45;
+      const spCpY = crownY + Math.sin(angle) * frondLen * 0.45 + droopAmount * 0.3;
+
+      // Spine tip: farther out and drooped
+      const spTipX = crownX + Math.cos(angle) * frondLen * 0.85;
+      const spTipY = crownY + Math.sin(angle) * frondLen * 0.35 + droopAmount;
+
+      // Draw spine — thick near crown, tapering to thin at tip
+      const spineSteps = 10;
+      for (let s = 0; s < spineSteps; s++) {
+        const t0 = s / spineSteps;
+        const t1 = (s + 1) / spineSteps;
+        const mt0 = 1 - t0, mt1 = 1 - t1;
+        const x0 = mt0*mt0*crownX + 2*mt0*t0*spCpX + t0*t0*spTipX;
+        const y0 = mt0*mt0*crownY + 2*mt0*t0*spCpY + t0*t0*spTipY;
+        const x1 = mt1*mt1*crownX + 2*mt1*t1*spCpX + t1*t1*spTipX;
+        const y1 = mt1*mt1*crownY + 2*mt1*t1*spCpY + t1*t1*spTipY;
+        const w = Math.max(0.8, (9 - 7 * ((t0 + t1) / 2)) * scale);
+        g.moveTo(x0, y0);
+        g.lineTo(x1, y1);
+        g.stroke({ width: w, color: col, alpha: 1 });
+      }
+
+      // Leaflets along spine — wide & long near crown, tapering toward tip
+      const numLeaflets = 12 + rng.int(0, 4);
+      for (let j = 1; j <= numLeaflets; j++) {
+        const t = j / (numLeaflets + 1);
+
+        // Quadratic bezier point on spine
+        const mt = 1 - t;
+        const sx = mt*mt*crownX + 2*mt*t*spCpX + t*t*spTipX;
+        const sy = mt*mt*crownY + 2*mt*t*spCpY + t*t*spTipY;
+
+        // Spine tangent at t
+        const stx = 2*mt*(spCpX - crownX) + 2*t*(spTipX - spCpX);
+        const sty = 2*mt*(spCpY - crownY) + 2*t*(spTipY - spCpY);
+        const stLen = Math.sqrt(stx*stx + sty*sty) || 1;
+
+        // Perpendicular to spine
+        const pnx = -sty / stLen;
+        const pny =  stx / stLen;
+
+        // Taper factor: 1.0 at crown end, ~0.15 at tip
+        const taper = Math.max(0.15, 1 - t * 0.85);
+
+        // Leaflet length — long near crown, short near tip
+        const leafLen = (65 + rng.float(-10, 10)) * scale * taper;
+
+        // Leaflet base width — fat near crown, thin near tip
+        const halfBase = Math.max(0.8, (9 + rng.float(-1, 1)) * scale * taper);
+
+        // Leaflet droop: tips curve downward
+        const leafDroopY = leafLen * 0.3;
+
+        // Both sides of the spine
+        for (const side of [-1, 1]) {
+          const leafTipX = sx + pnx * side * leafLen;
+          const leafTipY = sy + pny * side * leafLen + leafDroopY;
+
+          // Base offsets along spine tangent
+          const bpx = (stx / stLen) * halfBase;
+          const bpy = (sty / stLen) * halfBase;
+
+          g.poly([
+            sx + bpx, sy + bpy,
+            leafTipX, leafTipY,
+            sx - bpx, sy - bpy,
+          ]);
+          g.fill(col);
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Billboard — neon-framed sign on a single post
+  // ---------------------------------------------------------------------------
+  private drawRoadsideBillboard(
+    g: Graphics, x: number, baseY: number, scale: number, seed: number,
+    palette: PaletteConfig,
+  ): void {
+    const rng      = new Random(seed);
+    const postH    = 70 * scale;
+    const postW    = Math.max(1.5, 3 * scale);
+    const signW    = 74 * scale;
+    const signH    = 40 * scale;
+    const signBotY = baseY - postH;
+    const signTopY = signBotY - signH;
+    const signL    = x - signW / 2;
+
+    const neonPool = [0xff20c0, 0x20ffd0, 0xff6010, 0x10c0ff, 0xffe020, 0xff4060];
+    const neonCol  = neonPool[rng.int(0, neonPool.length - 1)];
+
+    // ── Post ─────────────────────────────────────────────────────────────────
+    g.rect(x - postW / 2, signBotY, postW, postH);
+    g.fill(0x22203a);
+
+    // ── Sign backing ─────────────────────────────────────────────────────────
+    g.rect(signL, signTopY, signW, signH);
+    g.fill(0x0d0e1e);
+
+    // ── Neon border — outer glow passes ──────────────────────────────────────
+    for (let i = 3; i >= 1; i--) {
+      const pad = i * 2 * scale;
+      g.rect(signL - pad, signTopY - pad, signW + pad * 2, signH + pad * 2);
+      g.stroke({ width: Math.max(0.5, 1.5 * scale), color: neonCol, alpha: 0.10 * (4 - i) });
+    }
+
+    // ── Bright neon border ───────────────────────────────────────────────────
+    g.rect(signL, signTopY, signW, signH);
+    g.stroke({ width: Math.max(0.8, 1.5 * scale), color: neonCol, alpha: 0.95 });
+
+    // ── Inner horizontal stripes ─────────────────────────────────────────────
+    const stripeH = signH * 0.18;
+    for (let s = 0; s < 3; s++) {
+      const sy = signTopY + 4 * scale + s * (signH - 8 * scale) / 3;
+      g.rect(signL + 4 * scale, sy, signW - 8 * scale, stripeH);
+      g.fill({ color: neonCol, alpha: 0.10 + s * 0.06 });
+    }
+
+    // ── Bold divider line through middle ─────────────────────────────────────
+    const midY = signTopY + signH * 0.5;
+    g.moveTo(signL + 4 * scale, midY);
+    g.lineTo(signL + signW - 4 * scale, midY);
+    g.stroke({ width: Math.max(0.5, 0.8 * scale), color: neonCol, alpha: 0.55 });
+
+    // ── "Text" blocks — two rows of short rectangles ─────────────────────────
+    for (let row = 0; row < 2; row++) {
+      const ry     = signTopY + signH * (0.18 + row * 0.55);
+      const numSeg = 3;
+      let curX     = signL + 6 * scale;
+      for (let s = 0; s < numSeg; s++) {
+        const segW = (rng.float(0.12, 0.22)) * signW;
+        g.rect(curX, ry, segW, Math.max(1, 2.5 * scale));
+        g.fill({ color: neonCol, alpha: 0.70 });
+        curX += segW + 4 * scale;
+        if (curX + segW > signL + signW - 6 * scale) break;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rock formation — angular dark boulders with neon rim highlight
+  // ---------------------------------------------------------------------------
+  private drawRoadsideRock(
+    g: Graphics, x: number, baseY: number, scale: number, seed: number,
+    palette: PaletteConfig,
+  ): void {
+    const rng         = new Random(seed);
+    const numBoulders = rng.int(2, 4);
+    const rockCol     = 0x1c1a2c;   // dark purple-grey — visible against ground
+
+    for (let b = 0; b < numBoulders; b++) {
+      const bx  = x + rng.float(-1, 1) * 20 * scale;
+      const bw  = (24 + rng.float(0, 22)) * scale;
+      const bh  = (14 + rng.float(0, 14)) * scale;
+
+      // 5-point irregular boulder: left-base → left-shoulder → peak → right-shoulder → right-base
+      const peakOff = rng.float(-0.2, 0.2) * bw;   // peak slightly off-centre
+      const pts = [
+        bx - bw * 0.50, baseY,                         // left base
+        bx - bw * 0.45, baseY - bh * rng.float(0.5, 0.75),  // left shoulder
+        bx + peakOff,   baseY - bh,                    // peak
+        bx + bw * 0.45, baseY - bh * rng.float(0.45, 0.70), // right shoulder
+        bx + bw * 0.50, baseY,                         // right base
+      ];
+
+      g.poly(pts);
+      g.fill(rockCol);
+
+      // Shadow face — slightly darker bottom half
+      g.poly([
+        pts[0], pts[1],   // left base
+        pts[8], pts[9],   // right base
+        bx + bw * 0.45, baseY - bh * 0.4,
+        bx - bw * 0.45, baseY - bh * 0.35,
+      ]);
+      g.fill({ color: 0x0e0c1a, alpha: 0.55 });
+
+      // Neon rim highlight — top edge only
+      g.moveTo(pts[0], pts[1]);
+      g.lineTo(pts[2], pts[3]);
+      g.lineTo(pts[4], pts[5]);
+      g.lineTo(pts[6], pts[7]);
+      g.lineTo(pts[8], pts[9]);
+      g.stroke({ width: Math.max(0.5, 1.1 * scale), color: palette.gridColor, alpha: 0.45 });
+    }
   }
 }
