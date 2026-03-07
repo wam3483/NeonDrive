@@ -1,4 +1,4 @@
-import { Graphics } from 'pixi.js';
+import { Graphics, Text, Container, RenderTexture, Sprite } from 'pixi.js';
 import { SunsetRenderer } from '$lib/sunset';
 import type { PaletteConfig, RoadRenderContext } from '$lib/sunset';
 import { Random } from '$lib/map/random';
@@ -9,12 +9,22 @@ export type CarStyle = 'classic' | 'sport';
 // Roadside scenery
 // ---------------------------------------------------------------------------
 interface RoadsideSprite {
-  type: 'palm' | 'billboard' | 'rock';
+  type: 'palm' | 'rock';
   side: -1 | 1;
   z: number;          // 0–1 loop phase (position along the scroll cycle)
   extraFrac: number;  // lateral offset beyond guard rail, in halfBottom units
   scaleVar: number;   // random scale multiplier
   seed: number;       // for deterministic shape generation
+  variant: number;    // index into baked texture pool for this type
+}
+
+interface TrackBillboard {
+  trackIndex: number; // fixed position on track (0 … N-1)
+  side: -1 | 1;
+  extraFrac: number;
+  scaleVar: number;
+  seed: number;
+  variant: number;    // index into baked billboard texture pool
 }
 
 // ---------------------------------------------------------------------------
@@ -28,11 +38,19 @@ interface TrackPt { x: number; y: number; }
  * Multi-frequency polar oval so there's a healthy variety of curves.
  */
 function generateTrack(N = 300): TrackPt[] {
+  // Figure-8 (lemniscate-ish) gives equal left and right turns
+  // with long straight-ish stretches between the lobes.
   const pts: TrackPt[] = [];
   for (let i = 0; i < N; i++) {
     const t = (i / N) * Math.PI * 2;
-    const r = 1 + 0.25 * Math.sin(t * 2.5) + 0.12 * Math.sin(t * 6 + 0.8);
-    pts.push({ x: Math.cos(t) * 400 * r, y: Math.sin(t) * 240 * r });
+    // Base figure-8: x = sin(t), y = sin(2t)/2
+    // Scaled up and gently perturbed so it's not perfectly symmetric
+    const fx = Math.sin(t);
+    const fy = Math.sin(2 * t) * 0.45;
+    // Small wobble for variety
+    const wx = 0.06 * Math.sin(3 * t + 1.2);
+    const wy = 0.04 * Math.sin(5 * t + 0.7);
+    pts.push({ x: (fx + wx) * 500, y: (fy + wy) * 400 });
   }
   return pts;
 }
@@ -47,6 +65,14 @@ export class DriveGameRenderer extends SunsetRenderer {
 
   // ── roadside scenery ──────────────────────────────────────────────────────
   private roadsideSprites: RoadsideSprite[] = [];
+  private trackBillboards: TrackBillboard[] = [];
+
+  // ── baked sprite textures ───────────────────────────────────────────────
+  private bakedPalms: RenderTexture[] = [];
+  private bakedRocks: RenderTexture[] = [];
+  private bakedBillboards: RenderTexture[] = [];
+  private roadsideContainer: Container = new Container();
+  private spritePool: Sprite[] = [];
 
   // ── track & steering state ────────────────────────────────────────────────
   private trackPoints: TrackPt[] = [];
@@ -59,12 +85,27 @@ export class DriveGameRenderer extends SunsetRenderer {
   /** Visual lean for steering feedback (-1 … +1). */
   private carLean = 0;
 
+  // ── FPS display ──────────────────────────────────────────────────────────
+  private showFps = false;
+  private fpsText: Text | null = null;
+  private fpsFrames = 0;
+  private fpsElapsed = 0;
+  private fpsDisplay = 0;
+
   // ── input ─────────────────────────────────────────────────────────────────
   private keysDown = new Set<string>();
   private onKeyDown = (e: KeyboardEvent) => { this.keysDown.add(e.key.toLowerCase()); };
   private onKeyUp   = (e: KeyboardEvent) => { this.keysDown.delete(e.key.toLowerCase()); };
 
   // ── public API ─────────────────────────────────────────────────────────────
+  setShowFps(show: boolean): void {
+    this.showFps = show;
+    if (!show && this.fpsText) {
+      this.fpsText.destroy();
+      this.fpsText = null;
+    }
+  }
+
   setCarStyle(style: CarStyle): void {
     this.carStyle = style;
     const g = this.findByLabel('car');
@@ -75,6 +116,8 @@ export class DriveGameRenderer extends SunsetRenderer {
     await super.init(canvas, width, height);
     this.trackPoints = generateTrack();
     this.generateRoadsideSprites();
+    this.bakeRoadsideTextures();
+    this.roadsideContainer.label = 'roadside';
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup',   this.onKeyUp);
   }
@@ -82,6 +125,11 @@ export class DriveGameRenderer extends SunsetRenderer {
   destroy(): void {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup',   this.onKeyUp);
+    for (const t of [...this.bakedPalms, ...this.bakedRocks, ...this.bakedBillboards]) t.destroy(true);
+    this.bakedPalms = [];
+    this.bakedRocks = [];
+    this.bakedBillboards = [];
+    this.spritePool = [];
     super.destroy();
   }
 
@@ -97,6 +145,7 @@ export class DriveGameRenderer extends SunsetRenderer {
     this.processInput(ticker.deltaTime);
     this.updateRoadsideSprites();
     this.updateCar();
+    this.updateFps(ticker.deltaTime);
   }
 
   /**
@@ -143,6 +192,23 @@ export class DriveGameRenderer extends SunsetRenderer {
   }
 
   // ── per-frame update ───────────────────────────────────────────────────────
+  private updateFps(dt: number): void {
+    if (!this.showFps) return;
+    this.fpsFrames++;
+    this.fpsElapsed += dt / 60; // dt is in frames at 60fps, convert to seconds
+    if (this.fpsElapsed >= 0.5) {
+      this.fpsDisplay = Math.round(this.fpsFrames / this.fpsElapsed);
+      this.fpsFrames = 0;
+      this.fpsElapsed = 0;
+    }
+    if (!this.fpsText) {
+      this.fpsText = new Text({ text: '', style: { fontFamily: 'monospace', fontSize: 14, fill: 0x00ff00 } });
+      this.fpsText.position.set(4, 4);
+      this.app.stage.addChild(this.fpsText);
+    }
+    this.fpsText.text = `${this.fpsDisplay} fps`;
+  }
+
   private processInput(dt: number): void {
     const N          = this.trackPoints.length;
     const baseSpeed  = 0.4 * dt;   // track points per tick at 60 fps
@@ -818,26 +884,95 @@ export class DriveGameRenderer extends SunsetRenderer {
   // Roadside scenery generation & rendering
   // ---------------------------------------------------------------------------
 
+  private static readonly PALM_VARIANTS = 8;
+  private static readonly ROCK_VARIANTS = 6;
+  private static readonly BILLBOARD_VARIANTS = 4;
+
   private generateRoadsideSprites(): void {
     const rng = new Random(9876);
     const N   = 52;
     const typePool: Array<RoadsideSprite['type']> = [
-      'palm', 'palm', 'palm', 'palm',
-      'billboard', 'billboard', 'billboard',
-      'rock', 'rock', 'rock', 'rock',
+      'palm', 'palm', 'palm', 'palm', 'palm', 'palm',
+      'rock', 'rock', 'rock', 'rock', 'rock',
     ];
 
+    // Scroll-loop scenery (palms & rocks only)
     this.roadsideSprites = [];
     for (let i = 0; i < N; i++) {
       const side = rng.float(0, 1) < 0.5 ? -1 : 1;
+      const type = typePool[rng.int(0, typePool.length - 1)];
+      const maxVar = type === 'palm' ? DriveGameRenderer.PALM_VARIANTS : DriveGameRenderer.ROCK_VARIANTS;
       this.roadsideSprites.push({
-        type:      typePool[rng.int(0, typePool.length - 1)],
+        type,
         side:      side as -1 | 1,
         z:         i / N,
-        extraFrac: rng.float(0.08, 0.36),  // lateral offset beyond guard rail
+        extraFrac: rng.float(0.08, 0.36),
         scaleVar:  rng.float(0.75, 1.30),
         seed:      rng.int(0, 9999),
+        variant:   rng.int(0, maxVar - 1),
       });
+    }
+
+    // Track-anchored billboards — spaced along the actual track path
+    const trackN      = this.trackPoints.length;
+    const bbRng       = new Random(5432);
+    const bbCount     = 6;
+    const minSpacing  = Math.floor(trackN / bbCount);
+    this.trackBillboards = [];
+    for (let i = 0; i < bbCount; i++) {
+      const idx = (i * minSpacing + bbRng.int(0, Math.floor(minSpacing * 0.4))) % trackN;
+      this.trackBillboards.push({
+        trackIndex: idx,
+        side:       bbRng.float(0, 1) < 0.5 ? -1 : 1,
+        extraFrac:  bbRng.float(0.10, 0.30),
+        scaleVar:   bbRng.float(0.85, 1.20),
+        seed:       bbRng.int(0, 9999),
+        variant:    bbRng.int(0, DriveGameRenderer.BILLBOARD_VARIANTS - 1),
+      });
+    }
+  }
+
+  private bakeRoadsideTextures(): void {
+    const palette = this.getActivePalette();
+
+    // Helper: draw into a Graphics at (cx, baseY) with scale=1, then render to texture
+    const bake = (
+      w: number, h: number,
+      drawFn: (g: Graphics, cx: number, baseY: number) => void,
+    ): RenderTexture => {
+      const g = new Graphics();
+      drawFn(g, w / 2, h);
+      const rt = RenderTexture.create({ width: w, height: h });
+      this.app.renderer.render({ container: g, target: rt });
+      g.destroy();
+      return rt;
+    };
+
+    // Bake palm variants
+    this.bakedPalms = [];
+    for (let i = 0; i < DriveGameRenderer.PALM_VARIANTS; i++) {
+      const seed = 7000 + i * 137;
+      this.bakedPalms.push(bake(500, 1000, (g, cx, baseY) => {
+        this.drawRoadsidePalm(g, cx, baseY, 1, seed, palette);
+      }));
+    }
+
+    // Bake rock variants
+    this.bakedRocks = [];
+    for (let i = 0; i < DriveGameRenderer.ROCK_VARIANTS; i++) {
+      const seed = 3000 + i * 211;
+      this.bakedRocks.push(bake(120, 80, (g, cx, baseY) => {
+        this.drawRoadsideRock(g, cx, baseY, 1, seed, palette);
+      }));
+    }
+
+    // Bake billboard variants
+    this.bakedBillboards = [];
+    for (let i = 0; i < DriveGameRenderer.BILLBOARD_VARIANTS; i++) {
+      const seed = 5000 + i * 173;
+      this.bakedBillboards.push(bake(900, 1200, (g, cx, baseY) => {
+        this.drawRoadsideBillboard(g, cx, baseY, 1, seed, palette);
+      }));
     }
   }
 
@@ -853,35 +988,28 @@ export class DriveGameRenderer extends SunsetRenderer {
   }
 
   private drawRoadsideSprites(): void {
-    const g = new Graphics();
-    g.label = 'roadside';
-    this.renderRoadsideSpriteGraphics(g);
-    this.container.addChild(g);
+    this.container.addChild(this.roadsideContainer);
   }
 
   private updateRoadsideSprites(): void {
-    const g = this.findByLabel('roadside');
-    if (!g) return;
-    g.clear();
-    this.renderRoadsideSpriteGraphics(g);
-  }
+    // Hide all pooled sprites, then reuse as needed
+    for (const s of this.spritePool) s.visible = false;
+    let poolIdx = 0;
 
-  private renderRoadsideSpriteGraphics(g: Graphics): void {
     const horizonY   = this.height * 0.55;
     const groundH    = this.height - horizonY;
     const halfBot    = this.width * 0.75;
-    const railFrac   = 0.85 / 0.75;   // matches RealisticRoadRenderer
+    const railFrac   = 0.85 / 0.75;
     const MIN_T      = 0.04;
-    const palette    = this.getActivePalette();
     const scroll     = (this.animationTime * 0.3) % 1.0;
 
-    // Resolve each sprite to a screen position, then sort far→near
-    type Placed = { sprite: RoadsideSprite; perspT: number; x: number; y: number };
+    type Placed = { texture: RenderTexture; perspT: number; x: number; y: number; scaleVar: number };
     const visible: Placed[] = [];
 
+    // Scroll-loop scenery
     for (const sprite of this.roadsideSprites) {
       const rawT  = ((sprite.z + scroll) % 1.0);
-      const t     = rawT * rawT;   // quadratic — same distribution as road lines
+      const t     = rawT * rawT;
       if (t < MIN_T || t > 0.96) continue;
 
       const perspT = t;
@@ -889,22 +1017,64 @@ export class DriveGameRenderer extends SunsetRenderer {
       const cx     = this.roadCenterX(perspT);
       const x      = cx + sprite.side * (railFrac + sprite.extraFrac) * perspT * halfBot;
 
-      // Cull objects that have scrolled too far off-screen laterally
       if (x < -120 || x > this.width + 120) continue;
 
-      visible.push({ sprite, perspT, x, y });
+      const texture = sprite.type === 'palm'
+        ? this.bakedPalms[sprite.variant]
+        : this.bakedRocks[sprite.variant];
+
+      visible.push({ texture, perspT, x, y, scaleVar: sprite.scaleVar });
+    }
+
+    // Track-anchored billboards
+    const trackN    = this.trackPoints.length;
+    const viewRange = 60;
+
+    for (const bb of this.trackBillboards) {
+      let dist = bb.trackIndex - this.trackT;
+      if (dist < -trackN / 2) dist += trackN;
+      if (dist >  trackN / 2) dist -= trackN;
+      if (dist < 1 || dist > viewRange) continue;
+
+      const perspT  = Math.max(MIN_T, 1 - (dist / viewRange));
+      const perspT2 = perspT * perspT;
+      const bbY     = horizonY + perspT2 * groundH;
+      const bbCx    = this.roadCenterX(perspT2);
+      const bbX     = bbCx + bb.side * (railFrac + bb.extraFrac) * perspT2 * halfBot;
+
+      if (bbX < -200 || bbX > this.width + 200) continue;
+
+      visible.push({
+        texture: this.bakedBillboards[bb.variant],
+        perspT: perspT2,
+        x: bbX,
+        y: bbY,
+        scaleVar: bb.scaleVar,
+      });
     }
 
     // Painter's order: far first
     visible.sort((a, b) => a.perspT - b.perspT);
 
-    for (const { sprite, perspT, x, y } of visible) {
-      const scale = perspT * sprite.scaleVar;
-      switch (sprite.type) {
-        case 'palm':      this.drawRoadsidePalm(g, x, y, scale, sprite.seed, palette);      break;
-        case 'billboard': this.drawRoadsideBillboard(g, x, y, scale, sprite.seed, palette); break;
-        case 'rock':      this.drawRoadsideRock(g, x, y, scale, sprite.seed, palette);      break;
+    for (const item of visible) {
+      const scale = item.perspT * item.scaleVar;
+
+      // Get or create a sprite from the pool
+      let spr: Sprite;
+      if (poolIdx < this.spritePool.length) {
+        spr = this.spritePool[poolIdx];
+      } else {
+        spr = new Sprite();
+        spr.anchor.set(0.5, 1.0); // center-bottom anchor
+        this.roadsideContainer.addChild(spr);
+        this.spritePool.push(spr);
       }
+      poolIdx++;
+
+      spr.texture = item.texture;
+      spr.visible = true;
+      spr.position.set(item.x, item.y);
+      spr.scale.set(scale, scale);
     }
   }
 
@@ -1072,10 +1242,10 @@ export class DriveGameRenderer extends SunsetRenderer {
     palette: PaletteConfig,
   ): void {
     const rng      = new Random(seed);
-    const postH    = 70 * scale;
-    const postW    = Math.max(1.5, 3 * scale);
-    const signW    = 74 * scale;
-    const signH    = 40 * scale;
+    const postH    = 700 * scale;
+    const postW    = Math.max(4, 30 * scale);
+    const signW    = 740 * scale;
+    const signH    = 400 * scale;
     const signBotY = baseY - postH;
     const signTopY = signBotY - signH;
     const signL    = x - signW / 2;

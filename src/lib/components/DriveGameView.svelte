@@ -25,6 +25,7 @@
       roadStyle: 'road',
     });
     r.setCarStyle('sport');
+    r.setShowFps(true);
     renderer = r;
   }
 
