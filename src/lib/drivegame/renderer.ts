@@ -18,6 +18,13 @@ interface RoadsideSprite {
   variant: number;    // index into baked texture pool for this type
 }
 
+interface TrackObstacle {
+  type: 'fallenPalm';
+  trackIndex: number; // fixed position on track (0 … N-1)
+  lateralOffset: number; // -1 … +1 across road width
+  variant: number;
+}
+
 interface TrackBillboard {
   trackIndex: number; // fixed position on track (0 … N-1)
   side: -1 | 1;
@@ -67,10 +74,14 @@ export class DriveGameRenderer extends SunsetRenderer {
   private roadsideSprites: RoadsideSprite[] = [];
   private trackBillboards: TrackBillboard[] = [];
 
+  // ── road obstacles ───────────────────────────────────────────────────────
+  private trackObstacles: TrackObstacle[] = [];
+
   // ── baked sprite textures ───────────────────────────────────────────────
   private bakedPalms: RenderTexture[] = [];
   private bakedRocks: RenderTexture[] = [];
   private bakedBillboards: RenderTexture[] = [];
+  private bakedFallenPalms: RenderTexture[] = [];
   private roadsideContainer: Container = new Container();
   private spritePool: Sprite[] = [];
 
@@ -125,10 +136,11 @@ export class DriveGameRenderer extends SunsetRenderer {
   destroy(): void {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup',   this.onKeyUp);
-    for (const t of [...this.bakedPalms, ...this.bakedRocks, ...this.bakedBillboards]) t.destroy(true);
+    for (const t of [...this.bakedPalms, ...this.bakedRocks, ...this.bakedBillboards, ...this.bakedFallenPalms]) t.destroy(true);
     this.bakedPalms = [];
     this.bakedRocks = [];
     this.bakedBillboards = [];
+    this.bakedFallenPalms = [];
     this.spritePool = [];
     super.destroy();
   }
@@ -887,6 +899,7 @@ export class DriveGameRenderer extends SunsetRenderer {
   private static readonly PALM_VARIANTS = 8;
   private static readonly ROCK_VARIANTS = 6;
   private static readonly BILLBOARD_VARIANTS = 4;
+  private static readonly FALLEN_PALM_VARIANTS = 4;
 
   private generateRoadsideSprites(): void {
     const rng = new Random(9876);
@@ -928,6 +941,21 @@ export class DriveGameRenderer extends SunsetRenderer {
         scaleVar:   bbRng.float(0.85, 1.20),
         seed:       bbRng.int(0, 9999),
         variant:    bbRng.int(0, DriveGameRenderer.BILLBOARD_VARIANTS - 1),
+      });
+    }
+
+    // Track-anchored obstacles — fallen palms on the road
+    const obsRng     = new Random(1234);
+    const obsCount   = 5;
+    const obsSpacing = Math.floor(trackN / obsCount);
+    this.trackObstacles = [];
+    for (let i = 0; i < obsCount; i++) {
+      const idx = (i * obsSpacing + obsRng.int(0, Math.floor(obsSpacing * 0.3))) % trackN;
+      this.trackObstacles.push({
+        type:          'fallenPalm',
+        trackIndex:    idx,
+        lateralOffset: [-0.55, 0, 0.55][obsRng.int(0, 2)],
+        variant:       obsRng.int(0, DriveGameRenderer.FALLEN_PALM_VARIANTS - 1),
       });
     }
   }
@@ -974,6 +1002,15 @@ export class DriveGameRenderer extends SunsetRenderer {
         this.drawRoadsideBillboard(g, cx, baseY, 1, seed, palette);
       }));
     }
+
+    // Bake fallen palm variants (horizontal, ~450 wide, ~120 tall)
+    this.bakedFallenPalms = [];
+    for (let i = 0; i < DriveGameRenderer.FALLEN_PALM_VARIANTS; i++) {
+      const seed = 8000 + i * 191;
+      this.bakedFallenPalms.push(bake(800, 400, (g, cx, _baseY) => {
+        this.drawFallenPalm(g, cx, 250, 1, seed, palette);
+      }));
+    }
   }
 
   /**
@@ -1003,7 +1040,7 @@ export class DriveGameRenderer extends SunsetRenderer {
     const MIN_T      = 0.04;
     const scroll     = (this.animationTime * 0.3) % 1.0;
 
-    type Placed = { texture: RenderTexture; perspT: number; x: number; y: number; scaleVar: number };
+    type Placed = { texture: RenderTexture; perspT: number; x: number; y: number; scaleVar: number; anchorY?: number };
     const visible: Placed[] = [];
 
     // Scroll-loop scenery
@@ -1026,7 +1063,7 @@ export class DriveGameRenderer extends SunsetRenderer {
       visible.push({ texture, perspT, x, y, scaleVar: sprite.scaleVar });
     }
 
-    // Track-anchored billboards
+    // Track-anchored objects (billboards + obstacles)
     const trackN    = this.trackPoints.length;
     const viewRange = 60;
 
@@ -1053,6 +1090,31 @@ export class DriveGameRenderer extends SunsetRenderer {
       });
     }
 
+    // Track-anchored obstacles (centered on road)
+    for (const obs of this.trackObstacles) {
+      let dist = obs.trackIndex - this.trackT;
+      if (dist < -trackN / 2) dist += trackN;
+      if (dist >  trackN / 2) dist -= trackN;
+      if (dist < 1 || dist > viewRange) continue;
+
+      const perspT  = Math.max(MIN_T, 1 - (dist / viewRange));
+      const perspT2 = perspT * perspT;
+      const obsY    = horizonY + perspT2 * groundH;
+      const obsCx   = this.roadCenterX(perspT2);
+      // Lateral offset within the road (not outside like billboards)
+      const roadHalfW = perspT2 * halfBot;
+      const obsX    = obsCx + obs.lateralOffset * roadHalfW * 0.6;
+
+      visible.push({
+        texture: this.bakedFallenPalms[obs.variant],
+        perspT: perspT2,
+        x: obsX,
+        y: obsY,
+        scaleVar: 1.0,
+        anchorY: 250 / 400,  // road-level is at y=250 in the 400px-tall texture
+      });
+    }
+
     // Painter's order: far first
     visible.sort((a, b) => a.perspT - b.perspT);
 
@@ -1072,6 +1134,7 @@ export class DriveGameRenderer extends SunsetRenderer {
       poolIdx++;
 
       spr.texture = item.texture;
+      spr.anchor.set(0.5, item.anchorY ?? 1.0);
       spr.visible = true;
       spr.position.set(item.x, item.y);
       spr.scale.set(scale, scale);
@@ -1304,6 +1367,147 @@ export class DriveGameRenderer extends SunsetRenderer {
   // ---------------------------------------------------------------------------
   // Rock formation — angular dark boulders with neon rim highlight
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Fallen palm tree — lit obstacle lying across the road
+  // ---------------------------------------------------------------------------
+  private drawFallenPalm(
+    g: Graphics, cx: number, baseY: number, scale: number, seed: number,
+    palette: PaletteConfig,
+  ): void {
+    const rng      = new Random(seed);
+    const trunkLen = 380 * scale;
+    const trunkCol = 0x2a2440;   // visible dark brown-purple
+    const neonCol  = palette.gridColor;
+    const frondCol = 0x1e2a1e;   // dark green tint
+
+    // Trunk lies roughly horizontal, slight curve
+    // Base (root end) is at left, crown (frond end) at right
+    const rootX  = cx - trunkLen * 0.5;
+    const rootY  = baseY;
+    const tipX   = cx + trunkLen * 0.5;
+    const bow    = rng.float(-0.15, 0.15) * trunkLen;
+    const tipY   = baseY + bow;
+    const midX   = (rootX + tipX) * 0.5 + rng.float(-0.1, 0.1) * trunkLen;
+    const midY   = Math.min(rootY, tipY) - rng.float(8, 18) * scale; // slight upward bow
+
+    // Tapered trunk as a series of quads along a quadratic bezier
+    const baseW = Math.max(2, 16 * scale);  // root end (thick)
+    const topW  = Math.max(1, 5 * scale);   // crown end (thin)
+    const steps = 12;
+    const leftPts: number[] = [];
+    const rightPts: number[] = [];
+
+    for (let i = 0; i <= steps; i++) {
+      const t  = i / steps;
+      const mt = 1 - t;
+      const px = mt * mt * rootX + 2 * mt * t * midX + t * t * tipX;
+      const py = mt * mt * rootY + 2 * mt * t * midY + t * t * tipY;
+      // Tangent
+      const tx = 2 * mt * (midX - rootX) + 2 * t * (tipX - midX);
+      const ty = 2 * mt * (midY - rootY) + 2 * t * (tipY - midY);
+      const tLen = Math.sqrt(tx * tx + ty * ty) || 1;
+      const nx = -ty / tLen;
+      const ny =  tx / tLen;
+      const halfW = baseW + (topW - baseW) * t;
+      leftPts.push(px + nx * halfW, py + ny * halfW);
+      rightPts.push(px - nx * halfW, py - ny * halfW);
+    }
+
+    const rightReversed: number[] = [];
+    for (let i = rightPts.length - 2; i >= 0; i -= 2) {
+      rightReversed.push(rightPts[i], rightPts[i + 1]);
+    }
+
+    // Trunk fill
+    const pts = [...leftPts, ...rightReversed];
+    g.poly(pts);
+    g.fill(trunkCol);
+
+    // Neon edge highlight
+    g.poly(pts);
+    g.stroke({ width: Math.max(0.5, 1.5 * scale), color: neonCol, alpha: 0.5 });
+
+    // Trunk ring segments for texture
+    for (let i = 1; i < steps; i += 2) {
+      const t  = i / steps;
+      const mt = 1 - t;
+      const px = mt * mt * rootX + 2 * mt * t * midX + t * t * tipX;
+      const py = mt * mt * rootY + 2 * mt * t * midY + t * t * tipY;
+      const tx = 2 * mt * (midX - rootX) + 2 * t * (tipX - midX);
+      const ty = 2 * mt * (midY - rootY) + 2 * t * (tipY - midY);
+      const tLen = Math.sqrt(tx * tx + ty * ty) || 1;
+      const nx = -ty / tLen;
+      const ny =  tx / tLen;
+      const halfW = baseW + (topW - baseW) * t;
+      g.moveTo(px + nx * halfW, py + ny * halfW);
+      g.lineTo(px - nx * halfW, py - ny * halfW);
+      g.stroke({ width: Math.max(0.3, 0.8 * scale), color: neonCol, alpha: 0.2 });
+    }
+
+    // Crown point (frond end)
+    const crownX = tipX;
+    const crownY = tipY;
+
+    // Fronds — full crown visible, splayed on the ground
+    const frondCount = 6 + rng.int(0, 2);
+    for (let i = 0; i < frondCount; i++) {
+      // Fronds fan out widely from the crown end
+      const baseAngle = -1.0 + (i / (frondCount - 1)) * 2.0 + rng.float(-0.15, 0.15);
+      const frondLen  = (100 + rng.float(-10, 20)) * scale;
+      const droopAmt  = (0.3 + rng.float(0, 0.3)) * frondLen;
+
+      const spCpX  = crownX + Math.cos(baseAngle) * frondLen * 0.45;
+      const spCpY  = crownY + Math.sin(baseAngle) * frondLen * 0.45 + droopAmt * 0.3;
+      const spTipX = crownX + Math.cos(baseAngle) * frondLen * 0.85;
+      const spTipY = crownY + Math.sin(baseAngle) * frondLen * 0.35 + droopAmt;
+
+      // Spine stroke
+      g.moveTo(crownX, crownY);
+      g.quadraticCurveTo(spCpX, spCpY, spTipX, spTipY);
+      g.stroke({ width: Math.max(0.5, 2 * scale), color: frondCol, alpha: 0.9 });
+
+      // Neon edge on spine
+      g.moveTo(crownX, crownY);
+      g.quadraticCurveTo(spCpX, spCpY, spTipX, spTipY);
+      g.stroke({ width: Math.max(0.3, 0.8 * scale), color: neonCol, alpha: 0.25 });
+
+      // Leaflets
+      const numLeaflets = 8 + rng.int(0, 3);
+      for (let j = 1; j <= numLeaflets; j++) {
+        const t  = j / (numLeaflets + 1);
+        const mt = 1 - t;
+        const sx = mt * mt * crownX + 2 * mt * t * spCpX + t * t * spTipX;
+        const sy = mt * mt * crownY + 2 * mt * t * spCpY + t * t * spTipY;
+        const stx = 2 * mt * (spCpX - crownX) + 2 * t * (spTipX - spCpX);
+        const sty = 2 * mt * (spCpY - crownY) + 2 * t * (spTipY - spCpY);
+        const stLen = Math.sqrt(stx * stx + sty * sty) || 1;
+        const pnx = -sty / stLen;
+        const pny =  stx / stLen;
+
+        const taper   = Math.max(0.15, 1 - t * 0.85);
+        const leafLen = (25 + rng.float(-5, 5)) * scale * taper;
+        const halfB   = Math.max(0.4, (4 + rng.float(-1, 1)) * scale * taper);
+        const droopY  = leafLen * 0.25;
+
+        for (const side of [-1, 1]) {
+          const lx = sx + pnx * side * leafLen;
+          const ly = sy + pny * side * leafLen + droopY;
+          const bpx = (stx / stLen) * halfB;
+          const bpy = (sty / stLen) * halfB;
+          g.poly([sx + bpx, sy + bpy, lx, ly, sx - bpx, sy - bpy]);
+          g.fill(frondCol);
+        }
+      }
+    }
+
+    // Root mass at the base end — torn earth clump
+    const rootR = 14 * scale;
+    g.circle(rootX, rootY, rootR);
+    g.fill(0x1a1828);
+    g.circle(rootX, rootY, rootR);
+    g.stroke({ width: Math.max(0.5, 1 * scale), color: neonCol, alpha: 0.3 });
+  }
+
   private drawRoadsideRock(
     g: Graphics, x: number, baseY: number, scale: number, seed: number,
     palette: PaletteConfig,
