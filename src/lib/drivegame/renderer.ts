@@ -6,6 +6,7 @@ import type { TrackPt } from './track';
 import { createCarRenderer } from './car';
 import type { CarRenderer, CarStyle } from './car';
 import { SceneryManager } from './scenery';
+import { CassetteMinigame } from './cassette';
 
 export type { CarStyle } from './car';
 
@@ -24,6 +25,10 @@ export class DriveGameRenderer extends SunsetRenderer {
   private curveOffset = 0;
   private carLean = 0;
 
+  // ── cassette minigame ────────────────────────────────────────────────────
+  private cassette = new CassetteMinigame();
+  private paused = false;
+
   // ── FPS display ──────────────────────────────────────────────────────────
   private showFps = false;
   private fpsText: Text | null = null;
@@ -33,8 +38,15 @@ export class DriveGameRenderer extends SunsetRenderer {
 
   // ── input ─────────────────────────────────────────────────────────────────
   private keysDown = new Set<string>();
-  private onKeyDown = (e: KeyboardEvent) => { this.keysDown.add(e.key.toLowerCase()); };
-  private onKeyUp   = (e: KeyboardEvent) => { this.keysDown.delete(e.key.toLowerCase()); };
+  private onKeyDown = (e: KeyboardEvent) => {
+    const key = e.key.toLowerCase();
+    if (key === 'c') {
+      this.toggleCassette();
+      return;
+    }
+    if (!this.paused) this.keysDown.add(key);
+  };
+  private onKeyUp = (e: KeyboardEvent) => { this.keysDown.delete(e.key.toLowerCase()); };
 
   // ── public API ─────────────────────────────────────────────────────────────
   setShowFps(show: boolean): void {
@@ -56,6 +68,7 @@ export class DriveGameRenderer extends SunsetRenderer {
     this.trackPoints = generateTrack();
     this.scenery.generate(this.trackPoints);
     this.scenery.bakeTextures(this.app.renderer, this.getActivePalette());
+    this.app.stage.addChild(this.cassette.container);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup',   this.onKeyUp);
   }
@@ -63,8 +76,21 @@ export class DriveGameRenderer extends SunsetRenderer {
   destroy(): void {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup',   this.onKeyUp);
+    this.cassette.destroy();
     this.scenery.destroy();
     super.destroy();
+  }
+
+  private toggleCassette(): void {
+    if (this.paused) {
+      this.cassette.hide();
+      this.paused = false;
+      this.keysDown.clear();
+    } else {
+      this.paused = true;
+      this.keysDown.clear();
+      this.cassette.show(this.app.canvas as HTMLCanvasElement, this.width, this.height);
+    }
   }
 
   // ── overrides ─────────────────────────────────────────────────────────────
@@ -75,6 +101,11 @@ export class DriveGameRenderer extends SunsetRenderer {
   }
 
   protected override animate(ticker: { deltaTime: number }): void {
+    if (this.paused) {
+      this.cassette.update(ticker.deltaTime);
+      this.updateFps(ticker.deltaTime);
+      return;
+    }
     super.animate(ticker);
     this.processInput(ticker.deltaTime);
     this.scenery.update({

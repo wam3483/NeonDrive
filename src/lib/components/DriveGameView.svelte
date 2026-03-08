@@ -40,6 +40,9 @@
   <div class="controls-hint">
     <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span>
     <span class="hint-text">to drive</span>
+    <span class="hint-sep"></span>
+    <span class="key">C</span>
+    <span class="hint-text">cassette repair</span>
   </div>
 </div>
 
@@ -84,5 +87,12 @@
 
   .hint-text {
     margin-left: 0.3rem;
+  }
+
+  .hint-sep {
+    width: 1px;
+    height: 1.2rem;
+    background: #333;
+    margin: 0 0.5rem;
   }
 </style>
